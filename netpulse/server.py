@@ -1554,7 +1554,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(
                     {"error": "нужен Content-Type: application/json"}, 415)
                 return
-            if not self.headers.get("X-Auth"):
+            # X-Auth обязателен только при включённой авторизации
+            if (self.api.cfg.get("web_auth_enabled")
+                    and not self.headers.get("X-Auth")):
                 self._send_json({"error": "нужен заголовок X-Auth"}, 403)
                 return
 
