@@ -157,7 +157,7 @@ class ParkWatchdog:
             streak = self._fail_streak.get(host, 0) + 1
             self._fail_streak[host] = streak
             if ping_ok:
-                hid = inv.resolve_host_id(host)
+                hid = inv.upsert_host(host, ip=ping_ip)
                 if hid:
                     inv.mark_online(hid, True)
                     if streak >= int(cfg.get("offline_after_polls", 3)):
@@ -180,7 +180,7 @@ class ParkWatchdog:
                         pass
                 return
             if streak >= int(cfg.get("offline_after_polls", 3)):
-                hid = inv.resolve_host_id(host)
+                hid = inv.upsert_host(host, ip=(host if not self._is_local(host) else ""))
                 if hid:
                     inv.mark_online(hid, False)
                     inv.note_event(

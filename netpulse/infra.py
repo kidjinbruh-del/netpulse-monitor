@@ -215,18 +215,23 @@ class Infra:
         ts, gw = self._gw_cache
         if gw and time.time() - ts < 600:
             return gw
-        gw = None
+        best = None  # (metric, ip)
         try:
             flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             r = subprocess.run(["route", "print", "0.0.0.0"], capture_output=True,
                                timeout=6, creationflags=flags)
             from core.utils import decode_process_output
             txt = decode_process_output(r.stdout or b"")
-            m = re.search(r"0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)", txt)
-            if m:
-                gw = m.group(1)
+            # 0.0.0.0  0.0.0.0  <шлюз>  <интерфейс>  <метрика> — берём минимум
+            for m in re.finditer(
+                    r"0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)\s+"
+                    r"(\d+\.\d+\.\d+\.\d+)\s+(\d+)", txt):
+                metric = int(m.group(3))
+                if best is None or metric < best[0]:
+                    best = (metric, m.group(1))
         except Exception as e:
             logger.debug("gateway: %s", e)
+        gw = best[1] if best else None
         self._gw_cache = (time.time(), gw)
         return gw
 
