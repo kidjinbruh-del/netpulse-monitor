@@ -1276,7 +1276,11 @@ class Handler(BaseHTTPRequestHandler):
                 w = _csv.writer(buf, delimiter=";", lineterminator="\r\n")
                 w.writerow(["Дата/время", "Источник", "Кто/где",
                             "Машина", "Минуты", "Запись"])
-                for e in self.api.svc.journal.list_entries(1000):
+                try:
+                    rows = self.api.svc.journal.list_entries(1000)
+                except Exception:
+                    rows = []
+                for e in rows:
                     w.writerow([e["timestamp"][:19], e["source"],
                                 e["user_name"] or "", e["host"] or "",
                                 e["minutes"] or 0, e["text"]])
