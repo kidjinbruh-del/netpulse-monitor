@@ -859,12 +859,34 @@ class Api:
         except Exception as e:
             return (500, {"ok": False, "error": str(e)})
 
-    def gpo_script(self, q):
+    def gpo_script(self, q, handler=None):
+        """Отдаёт GPO-скрипт. Вызывается двумя путями: напрямую из do_GET
+        (с handler) и через роутер — во втором случае файл уже не шлём."""
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "gpo", "inventory.ps1")
+        if handler is None:
+            return {"error": "внутренний вызов без handler"}
         if not os.path.isfile(path):
-            return (404, {"error": "скрипт не найден"})
-        self._send_file(path, download_name="netpulse-inventory.ps1")
+            self._send_json({"error": "скрипт не найден"}, 404)
+            return
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._send_json({"error": "не читается"}, 500)
+            return
+        handler.send_response(200)
+        handler.send_header("Content-Type",
+                            "text/plain; charset=utf-8")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.send_header(
+            "Content-Disposition",
+            'attachment; filename="netpulse-inventory.ps1"')
+        handler.end_headers()
+        try:
+            handler.wfile.write(data)
+        except BrokenPipeError:
+            pass
 
     # ----- плановые работы -----
 
@@ -1119,6 +1141,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/rdp":
             self.api.rdp_download(qs, self)
+            return
+
+        if path == "/api/gposcript":
+            self.api.gpo_script(qs, self)
             return
 
         if path.startswith("/api/"):
