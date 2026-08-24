@@ -308,11 +308,13 @@ class Infra:
 
     def device_list(self):
         return self.svc.db.execute(
-            """SELECT id, name, ip, dtype, vendor, online, health_score,
-                      sys_name, sys_descr, uptime_h, snmp_at, os
-               FROM hosts ORDER BY
-               CASE dtype WHEN 'router' THEN 0 WHEN 'switch' THEN 1
-                          WHEN 'server' THEN 2 ELSE 3 END, name""",
+            """SELECT h.id, h.name, h.ip, h.dtype, h.online, h.health_score,
+                      h.sys_name, h.sys_descr, h.uptime_h, h.snmp_at, h.os,
+                      (SELECT vendor FROM lan_devices
+                       WHERE ip = h.ip AND vendor != '' LIMIT 1) AS vendor
+               FROM hosts h
+               ORDER BY CASE h.dtype WHEN 'router' THEN 0 WHEN 'switch' THEN 1
+                                     WHEN 'server' THEN 2 ELSE 3 END, h.name""",
             fetch=True) or []
 
     def _wl_match(self, rules, **fields):
