@@ -1007,7 +1007,7 @@ const UI = {
   /* ---------- парк ПК / сторож / runbooks ---------- */
   async loadPark() {
     try {
-      const [h, ev, rb, fc] = await Promise.all([
+      const [h, ev, rb, fcd] = await Promise.all([
         apiGet("hosts"), apiGet("events?limit=60"), apiGet("runbooks"),
         apiGet("diskforecast")]);
       const wd = h.watchdog || {};
@@ -1048,12 +1048,12 @@ const UI = {
                <span class="muted">${esc(b.description || b.scope)}${b.params?.length ? " · параметры: " + esc(b.params.join(", ")) : ""}</span>
              </div>`).join("")
         : "Runbooks не найдены";
-      const fc = fcResp.forecasts || [];
-      $("disk-fc-status").textContent = fc.length
-        ? `Прогноз по наклону за последние недели — машин на грани: ${fc.length}`
+      const forecasts = fcd.forecasts || [];
+      $("disk-fc-status").textContent = forecasts.length
+        ? `Прогноз по наклону за последние недели — машин на грани: ${forecasts.length}`
         : "История ещё копится: нужно 2+ замера за несколько дней (сторож сам пишет каждый обход)";
-      $("diskfc-table").querySelector("tbody").innerHTML = fc.length
-        ? fc.map(f => {
+      $("diskfc-table").querySelector("tbody").innerHTML = forecasts.length
+        ? forecasts.map(f => {
             const c = f.days_left <= 14 ? "#ff5c74" : f.days_left <= 45 ? "#f5b942" : "#22d3a7";
             return `<tr>
               <td>${esc(f.host)}</td>
