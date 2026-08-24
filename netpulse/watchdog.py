@@ -194,10 +194,31 @@ class ParkWatchdog:
                    (timestamp, host_id, drive, free_gb, total_gb)
                    VALUES (?,?,?,?,?)""", rows)
 
+    def _resolve_hosts(self, cfg):
+        """Список целей. 'auto' = все машины из БД (парк + сканы ЛС)."""
+        raw = [h.strip() for h in (cfg.get("hosts") or []) if str(h).strip()]
+        if not any(h.lower() == "auto" for h in raw):
+            return raw
+        explicit = [h for h in raw if h.lower() != "auto"]
+        out, seen = list(explicit), set(explicit)
+        rows = self.svc.db.execute(
+            """SELECT name, ip FROM hosts
+               UNION ALL
+               SELECT COALESCE(NULLIF(hostname, '-'), ip), ip FROM lan_devices""",
+            fetch=True) or []
+        for r in rows:
+            for v in (r.get("name"), r.get("ip")):
+                v = str(v or "").strip()
+                if not v or v in seen or v.startswith("127."):
+                    continue
+                seen.add(v)
+                out.append(v)
+        return out[:60]
+
     def poll_cycle(self):
         """Один обход всего списка. Вызывается по расписанию или вручную."""
         cfg = self._cfg()
-        hosts = [h.strip() for h in (cfg.get("hosts") or []) if str(h).strip()]
+        hosts = self._resolve_hosts(cfg)
         for host in hosts[:60]:
             if self._stop.is_set():
                 break

@@ -464,6 +464,9 @@
             <label>Токен</label>
             <div class="row inline"><input id="set-token" class="inp grow mono" readonly>
               <button class="mini-btn" title="Сгенерировать новый" onclick="UI.regenToken()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+            <label>Доступ из сети (web_host)</label>
+            <div class="row inline"><input id="set-web-host" class="inp grow mono" placeholder="127.0.0.1 = только этот ПК"></div>
+            <div class="muted" style="font-size:11px;margin:-6px 0 4px">0.0.0.0 = открыть коллегам (auth включится сам). Нужен перезапуск задачи NetPulse и правило firewall</div>
             <label>Telegram уведомления</label>
             <label class="switch-row"><input type="checkbox" id="set-tg-on"><span class="slider"></span></label>
             <label>Bot token</label><input id="set-tg-token" class="inp">

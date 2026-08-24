@@ -1301,6 +1301,7 @@ const UI = {
       $("set-ports").value = (cfg.security?.suspicious_ports || []).join(", ");
       $("set-ids-th").value = cfg.security?.scan_detection_threshold ?? 15;
       $("set-auth").checked = !!cfg.web_auth_enabled;
+      $("set-web-host").value = cfg.web_host || "127.0.0.1";
       $("set-token").value = cfg.web_token_masked ||
         (cfg.web_token ? cfg.web_token.slice(0, 6) + "..." + cfg.web_token.slice(-4) : "");
       $("set-tg-on").checked = !!cfg.telegram?.enabled;
@@ -1343,6 +1344,7 @@ const UI = {
           scan_detection_threshold: +$("set-ids-th").value || 15,
         },
         web_auth_enabled: $("set-auth").checked,
+        web_host: $("set-web-host").value.trim() || "127.0.0.1",
         telegram: {
           enabled: $("set-tg-on").checked,
           token: $("set-tg-token").value.trim(),
@@ -1354,8 +1356,12 @@ const UI = {
           keep: +$("set-backup-keep").value || 7,
         },
       });
+      const hostSaved = $("set-web-host").value.trim() || "127.0.0.1";
+      const needRestart = !["127.0.0.1", "localhost"].includes(hostSaved)
+        ? "<br>⚠️ web_host изменён — перезапустите задачу NetPulse (schtasks /End + /Run)"
+        : "";
       $("settings-status").innerHTML =
-        `Сохранено и применено (${new Date().toLocaleTimeString("ru-RU")})`;
+        `Сохранено и применено (${new Date().toLocaleTimeString("ru-RU")})${needRestart}`;
       toast("Настройки применены");
     } catch (e) {
       $("settings-status").textContent = e.message;
