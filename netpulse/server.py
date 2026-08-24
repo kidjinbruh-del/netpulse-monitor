@@ -49,27 +49,34 @@ PROTECTED_SETTINGS = {"web_auth_enabled"}
 
 def platform_report_text(svc, days=30):
     """Текстовый отчёт отдела для начальства (журнал + парк + бэкапы)."""
-    rep = svc.journal.month_report(days)
     lines = [
         "=" * 56,
         f"ОТЧЁТ ОТДЕЛА ИТ  ({datetime.now():%Y-%m-%d %H:%M}, период {days} дн)",
         "=" * 56,
         "",
-        f"Записей в журнале : {rep['entries']}",
-        f"Затрачено времени : {rep['minutes']} мин (~{rep['hours']} ч)",
-        "",
-        "По источникам:",
     ]
-    for s in rep["by_source"]:
-        lines.append(f"  {s['source']:<10} {s['n']:>4} шт   {s['minutes']:>5} мин")
-    if rep["top_users"]:
-        lines += ["", "Больше всего времени:"]
-        for u in rep["top_users"]:
-            lines.append(f"  {u['who']:<20} {u['n']:>3} шт {u['minutes']:>5} мин")
-    if rep["top_hosts"]:
-        lines += ["", "Топ машин по обращениям:"]
-        for h in rep["top_hosts"]:
-            lines.append(f"  {h['host']:<20} {h['n']:>3} шт {h['minutes']:>5} мин")
+    try:
+        rep = svc.journal.month_report(days)
+        lines += [
+            f"Записей в журнале : {rep['entries']}",
+            f"Затрачено времени : {rep['minutes']} мин (~{rep['hours']} ч)",
+            "",
+            "По источникам:",
+        ]
+        for s in rep["by_source"]:
+            lines.append(f"  {s['source']:<10} {s['n']:>4} шт   {s['minutes']:>5} мин")
+        if rep["top_users"]:
+            lines += ["", "Больше всего времени:"]
+            for u in rep["top_users"]:
+                lines.append(f"  {u['who']:<20} {u['n']:>3} шт {u['minutes']:>5} мин")
+        if rep["top_hosts"]:
+            lines += ["", "Топ машин по обращениям:"]
+            for h in rep["top_hosts"]:
+                lines.append(f"  {h['host']:<20} {h['n']:>3} шт {h['minutes']:>5} мин")
+    except AttributeError:
+        lines.append("Журнал работ: модуль недоступен")
+    except Exception as e:
+        lines.append(f"Журнал работ: ошибка ({e})")
 
     worst = svc.inventory.worst_hosts(5) if hasattr(svc, "inventory") else []
     if worst:
