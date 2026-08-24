@@ -55,6 +55,7 @@
       <button data-view="diag" class="nav-btn"><svg class="ic"><use href="#i-route"/></svg>Диагностика</button>
       <button data-view="lan" class="nav-btn"><svg class="ic"><use href="#i-lan"/></svg>Локальная сеть</button>
       <button data-view="park" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Парк ПК</button>
+      <button data-view="infra" class="nav-btn"><svg class="ic"><use href="#i-globe"/></svg>Инфраструктура</button>
       <button data-view="capture" class="nav-btn"><svg class="ic"><use href="#i-capture"/></svg>Захват пакетов</button>
       <button data-view="security" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Безопасность<span id="ids-badge" class="badge hidden">0</span></button>
       <button data-view="ai" class="nav-btn"><svg class="ic"><use href="#i-chip"/></svg>AI-аналитика</button>
@@ -330,6 +331,22 @@
         <div id="sw-stats" class="muted"></div>
         <table class="tbl" id="sw-table">
           <thead><tr><th>ПО</th><th>Версия</th><th>Издатель</th><th>Машина</th><th>IP</th></tr></thead>
+          <tbody></tbody></table>
+      </div>
+    </section>
+
+    <!-- ============ INFRA ============ -->
+    <section class="view" id="view-infra">
+      <div class="card">
+        <div class="card-title">Сетевая инфраструктура — роутеры, коммутаторы, серверы
+          <span class="right">
+            <input class="inp" id="infra-community" placeholder="community" style="width:110px" value="public">
+            <button class="btn accent" id="infra-scan-btn" onclick="UI.infraScan()"><svg class="ic sm"><use href="#i-search"/></svg>Опросить (SNMP+ping)</button>
+          </span>
+        </div>
+        <div id="infra-status" class="result-box muted">Опрос: ping + SNMP v2c (sysName, sysDescr, uptime). Тип можно менять вручную — тогда автоклассификация его не тронет</div>
+        <table class="tbl" id="infra-table">
+          <thead><tr><th>Устройство</th><th>IP</th><th>Тип</th><th>Вендор</th><th>SNMP имя</th><th>Описание</th><th>Аптайм</th><th>Онлайн</th><th></th></tr></thead>
           <tbody></tbody></table>
       </div>
     </section>

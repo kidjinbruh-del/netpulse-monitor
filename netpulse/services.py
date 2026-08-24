@@ -34,6 +34,7 @@ from .runbooks import RunbookRunner
 from .backupwatch import BackupWatch
 from .planner import Planner
 from .softwareinv import SoftwareInventory
+from .infra import Infra
 
 
 def _now_iso():
@@ -142,6 +143,29 @@ class ProcessMonitor:
                             f"{len(self._scan_window[c.raddr.ip])} разных целей за {window:.0f}с")
                         self._scan_window[c.raddr.ip].clear()
                     if c.raddr.port in suspicious_ports:
+                        # whitelist IDS: {"process": "mstsc.exe", "ports": "3389"}
+                        wl = self.svc.cfg.get("ids", {}).get("whitelist") or []
+                        wl_hit = False
+                        for rule in wl:
+                            if not isinstance(rule, dict):
+                                continue
+                            proc_ok = (not rule.get("process")
+                                       or str(rule["process"]).lower()
+                                       in str(pname).lower())
+                            ports_ok = True
+                            if rule.get("ports"):
+                                try:
+                                    ports_ok = int(c.raddr.port) in [
+                                        int(x) for x in
+                                        str(rule["ports"]).replace(" ", "").split(",")
+                                        if x]
+                                except (ValueError, TypeError):
+                                    ports_ok = True
+                            if proc_ok and ports_ok:
+                                wl_hit = True
+                                break
+                        if wl_hit:
+                            continue
                         rl_key = f"sus:{c.raddr.ip}:{c.raddr.port}"
                         if now - self._last_alert[rl_key] > 300:
                             self._last_alert[rl_key] = now
@@ -273,11 +297,17 @@ class MTREngine:
                     hop_rec["ip"] = hop_ip
 
                 times = [float(t.replace(",", ".")) for t in _ms_times(out)]
-                if len(times) == 0:
-                    hop_rec["samples"].append((False, None))
-                else:
+                hop_answered = hop_ip not in ("*", "?")
+                if times:
                     for msv in times:
                         hop_rec["samples"].append((True, msv))
+                elif hop_answered:
+                    # Хоп ответил «TTL превышен» без поля времени (Windows) —
+                    # это ОТВЕТ, а не потеря; латентность промежуточного хопа
+                    # так не измерить, но потери считаем честно
+                    hop_rec["samples"].append((True, None))
+                else:
+                    hop_rec["samples"].append((False, None))
 
                 if hop_ip == target:
                     reached = True
@@ -293,8 +323,9 @@ class MTREngine:
             for h in self.hops:
                 samples = list(h["samples"])
                 sent = len(samples)
-                oks = [m for ok, m in samples if ok]
-                loss = round(100 * (sent - len(oks)) / sent, 1) if sent else 0.0
+                replies = [m for ok, m in samples if ok]
+                oks = [m for ok, m in samples if ok and m is not None]
+                loss = round(100 * (sent - len(replies)) / sent, 1) if sent else 0.0
                 out.append({
                     "hop": h["hop"],
                     "ip": h["ip"] if h["ip"] != "?" else "*",
@@ -431,6 +462,19 @@ class LANNetworkScanner:
             except Exception:
                 pass
             mac = arp.get(ip, "")
+            if not mac and ip == my_ip:
+                try:
+                    for if_name, addrs in psutil.net_if_addrs().items():
+                        for a in addrs:
+                            if a.family == psutil.AF_LINK and a.address:
+                                if_ip = next(
+                                    (x.address for x in addrs
+                                     if x.family == socket.AF_INET
+                                     and not x.address.startswith("169.")), "")
+                                if if_ip == ip:
+                                    mac = a.address
+                except Exception:
+                    pass
             vendor = next((v for pref, v in OUI_VENDORS.items()
                            if mac.startswith(pref.lower())), "")
             is_new = bool(mac) and mac not in self.known_macs
@@ -727,6 +771,7 @@ class MonitorService:
         self.backupwatch = BackupWatch(self)
         self.planner = Planner(self)
         self.softwareinv = SoftwareInventory(self)
+        self.infra = Infra(self)
 
         self._lock = threading.RLock()
         self._stop_event = threading.Event()

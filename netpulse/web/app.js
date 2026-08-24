@@ -192,7 +192,8 @@ function sparklineSVG(values, color) {
 const VIEW_TITLES = {
   dashboard: "Дашборд", journal: "Журнал работ", apps: "Приложения и сеть",
   traffic: "Соединения и интерфейсы", diag: "Диагностика сети",
-  lan: "Локальная сеть", park: "Парк ПК", capture: "Захват пакетов",
+  lan: "Локальная сеть", park: "Парк ПК", infra: "Инфраструктура",
+  capture: "Захват пакетов",
   security: "Безопасность и IDS", ai: "AI-аналитика", alerts: "Алерты",
   history: "История", settings: "Настройки",
 };
@@ -268,6 +269,7 @@ const UI = {
     if (view === "settings") this.loadSettings();
     if (view === "journal") this.loadJournal();
     if (view === "park") this.loadPark();
+    if (view === "infra") this.loadInfra();
   },
 
   /* ---------- живой поток состояния ---------- */
@@ -688,9 +690,10 @@ const UI = {
     const btn = $("lan-scan-btn");
     btn.disabled = true;
     this.setBox("lan-status", "Сканирование 254 адресов (пинг + ARP + reverse DNS)… до минуты");
+    let devices = [];
     try {
       const d = await apiPost("lanscan", {});
-      const devices = d.devices || [];
+      devices = d.devices || [];
       this.renderLan(devices, []);
       this.setBox("lan-status",
         `Онлайн сейчас: <b>${devices.length}</b> устройств. Новые помечены бейджем NEW.`);
@@ -698,7 +701,10 @@ const UI = {
       this.setBox("lan-status", "Ошибка: " + e.message);
     } finally {
       btn.disabled = false;
-      this.lanDevices();
+      try {
+        const d2 = await apiGet("landevices");
+        this.renderLan(devices, d2.devices);   // свежие first/last seen из БД
+      } catch (e) { this.lanDevices(); }
     }
   },
   renderLan(devices, dbDevices) {
@@ -827,7 +833,7 @@ const UI = {
       card.style.cssText = "background:var(--panel2);margin-top:10px;padding:12px 14px";
       card.innerHTML = `<div class="card-title" style="margin-bottom:8px">${esc(cat)}
         <span class="chip HIGH">${threats.length}</span></div>` +
-        threats.map(t => {
+        threats.map((t, idx) => {
           const sev = t.severity || "LOW";
           const name = t.process || t.domain || t.entry || "Неизвестно";
           const extra = [
@@ -836,15 +842,26 @@ const UI = {
             t.connections != null ? t.connections + " соед." : "",
             t.path || "",
           ].filter(Boolean).join(" · ");
+          const wl = t.path
+            ? `<button class="mini-btn" title="Добавить в whitelist IDS" onclick="UI.idsWlPath('${esc(String(t.path)).replace(/'/g, "")}')">+WL</button>`
+            : "";
           return `<div style="display:flex;gap:11px;padding:4px 0;align-items:center;flex-wrap:wrap">
             <span class="chip ${sev}">${sev}</span>
             <b>${esc(String(name)).slice(0, 60)}</b>
             <span class="muted">${esc(t.reason || "")}</span>
             <span class="muted mono" style="margin-left:auto;font-size:11px">${esc(extra)}</span>
+            ${wl}
           </div>`;
         }).join("");
       wrap.appendChild(card);
     }
+  },
+  async idsWlPath(path) {
+    try {
+      await apiPost("idswl", { path });
+      toast("В whitelist: путь добавлен");
+      this.securityScan(false);
+    } catch (e) { toast(String(e), true); }
   },
 
   async loadIds() {
@@ -1134,6 +1151,56 @@ const UI = {
     } catch (e) { toast(String(e), true); }
   },
 
+  /* ---------- инфраструктура ---------- */
+  async loadInfra() {
+    try {
+      const d = await apiGet("infra");
+      $("infra-status").textContent = d.gateway
+        ? `Шлюз по умолчанию: ${d.gateway} · community: "${d.community}" · машин: ${d.devices.length}`
+        : `Шлюз не определён · машин: ${d.devices.length}`;
+      $("infra-table").querySelector("tbody").innerHTML = d.devices.length
+        ? d.devices.map(m => {
+            const t = m.dtype || "unknown";
+            return `<tr>
+              <td>${esc(m.name)}${m.alias ? ` <span class="muted">(${esc(m.alias)})</span>` : ""}</td>
+              <td class="mono">${esc(m.ip || "")}</td>
+              <td><select class="inp" style="width:110px" onchange="UI.infraDtype(${m.id}, this.value)">
+                ${["router","switch","server","pc","infra","host","unknown"].map(x =>
+                  `<option value="${x}" ${x === t ? "selected" : ""}>${x}</option>`).join("")}
+              </select></td>
+              <td class="muted">${esc(m.vendor || "—")}</td>
+              <td>${esc(m.sys_name || "—")}</td>
+              <td class="muted">${esc((m.sys_descr || "—").slice(0, 60))}</td>
+              <td class="mono">${m.uptime_h != null ? m.uptime_h + " ч" : "—"}</td>
+              <td>${m.online ? "🟢" : "🔴"}</td>
+              <td>${(m.dtype === "router" || m.dtype === "switch" || m.dtype === "infra") && m.ip
+                    ? `<a class="mini-btn" href="http://${esc(m.ip)}" target="_blank" title="Веб-интерфейс устройства">🌐</a>` : ""}</td>
+            </tr>`;
+          }).join("")
+        : `<tr><td colspan="9" class="muted">Пусто — нажмите «Опросить»</td></tr>`;
+    } catch (e) { toast(String(e), true); }
+  },
+  async infraScan() {
+    const btn = $("infra-scan-btn");
+    btn.disabled = true;
+    const community = $("infra-community").value.trim() || "public";
+    try {
+      const r = await apiPost("infrascan", { community });
+      const alive = (r.devices || []).filter(x => x.alive).length;
+      const snmp = (r.devices || []).filter(x => x.snmp).length;
+      $("infra-status").textContent =
+        `Опрос завершён: живы ${alive}/${r.devices?.length ?? 0}, SNMP ответили ${snmp}`;
+      this.loadInfra();
+    } catch (e) { toast(String(e), true); }
+    btn.disabled = false;
+  },
+  async infraDtype(id, dtype) {
+    try {
+      await apiPost("infradtype", { host_id: id, dtype });
+      toast("Тип сохранён (ручной)");
+    } catch (e) { toast(String(e), true); }
+  },
+
   /* ---------- карточка машины ---------- */
   _curHost: null,
   async showHost(id) {
@@ -1281,6 +1348,9 @@ const UI = {
         }).join("<br>");
       else
         html += `<span class="muted">парк здоров</span>`;
+      const offline = h.hosts.filter(x => !x.online).length;
+      if (offline)
+        html += `<br><span style="color:#ff5c74">офлайн: ${offline}</span>`;
       html += `<br>Журнал за сутки: <b>${r.entries ?? 0}</b> (${r.minutes ?? 0} мин)`;
       $("dash-platform").innerHTML = html;
     } catch (e) { void e; }

@@ -149,9 +149,36 @@ class ParkWatchdog:
         timeout_sec = int(cfg.get("timeout_sec", 25))
         try:
             data = self._collect(host, timeout_sec)
-        except Exception as e:
+        except Exception:
+            # WinRM не ответил: различаем «машина выключена» и «жива, но не Windows»
+            ping_ip = "127.0.0.1" if self._is_local(host) else host
+            from netpulse.infra import ping as infra_ping
+            ping_ok = infra_ping(ping_ip)
             streak = self._fail_streak.get(host, 0) + 1
             self._fail_streak[host] = streak
+            if ping_ok:
+                hid = inv.resolve_host_id(host)
+                if hid:
+                    inv.mark_online(hid, True)
+                    if streak >= int(cfg.get("offline_after_polls", 3)):
+                        inv.note_event(
+                            hid, "nowinrm", "LOW", "watchdog",
+                            "Отвечает на ping, но нет WinRM — не Windows "
+                            "или выключен WinRM",
+                            dedup_key=f"{host}:nowinrm", dedup_hours=168)
+                    try:
+                        dtype = self.svc.infra.classify(ping_ip, None,
+                                                        winrm_ok=False)
+                        if dtype:
+                            row = next((r for r in inv.list_hosts()
+                                        if r["id"] == hid), None)
+                            if row and not row.get("dtype_manual") \
+                                    and not row.get("dtype"):
+                                self.svc.infra.set_dtype(hid, dtype,
+                                                         manual=False)
+                    except Exception:
+                        pass
+                return
             if streak >= int(cfg.get("offline_after_polls", 3)):
                 hid = inv.resolve_host_id(host)
                 if hid:

@@ -44,7 +44,11 @@ DEFAULTS = {
     },
     "ids": {
         "enabled": True,
-        "window_sec": 120
+        "window_sec": 120,
+        "whitelist": []
+    },
+    "infra": {
+        "community": "public"
     },
     "lan": {
         "auto_scan_min": 10

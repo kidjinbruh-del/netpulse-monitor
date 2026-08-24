@@ -718,7 +718,16 @@ class Api:
                 "HOSTS файл": SecurityScanner.check_hosts_file(),
             }
         else:
-            fn = lambda: SecurityScanner.run_full_scan(ports)
+            def full():
+                res = SecurityScanner.run_full_scan(ports)
+                wl = (self.cfg.get("ids") or {}).get("whitelist") or []
+                hidden = res.get("Скрытые процессы") or []
+                res["Скрытые процессы"] = [
+                    h for h in hidden
+                    if not self.svc.infra.whitelist_match_hidden(
+                        h.get("path") or "")]
+                return res
+            fn = full
 
         job_id = submit_job(fn)
 
@@ -1074,6 +1083,55 @@ class Api:
             self._wol = WolController(self.svc)
         return self._wol
 
+    # ----- инфраструктура: роутеры / свитчи / серверы -----
+
+    def infra_list(self, q):
+        return {"devices": self.svc.infra.device_list(),
+                "gateway": self.svc.infra.gateway_ip(),
+                "community": (self.cfg.get("infra") or {}).get("community",
+                                                               "public")}
+
+    def infra_scan(self, q):
+        body = self._read_body()
+        community = str(body.get("community") or "").strip() or None
+        job_id = submit_job(lambda: self.svc.infra.scan_infra(community))
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            j = JOBS.get(job_id, {})
+            if j.get("status") != "running":
+                return j.get("result") if j.get("status") == "done" \
+                    else {"error": j.get("error")}
+            time.sleep(1.5)
+        return (504, {"error": "опрос превысил таймаут"})
+
+    def infra_dtype(self, q):
+        body = self._read_body()
+        try:
+            hid = int(body.get("host_id") or 0)
+        except (ValueError, TypeError):
+            return (400, {"error": "нужен host_id"})
+        return self.svc.infra.set_dtype(hid, str(body.get("dtype") or ""))
+
+    def ids_wl_add(self, q):
+        body = self._read_body()
+        rule = {k: str(body.get(k) or "").strip()
+                for k in ("process", "ports", "path")}
+        rule = {k: v for k, v in rule.items() if v}
+        if not rule:
+            return (400, {"error": "пустое правило"})
+        cfg_ids = self.cfg.setdefault("ids", {})
+        wl = cfg_ids.setdefault("whitelist", [])
+        if rule not in wl:
+            wl.append(rule)
+        from .config import save_config
+        save_config(self.cfg)
+        try:
+            self.svc.push_alert("IDS_WL", f"Whitelist +: {rule}", "security",
+                                rate=10)
+        except Exception:
+            pass
+        return {"ok": True, "whitelist": wl}
+
     # ----- самодиагностика и карта для ИИ -----
 
     def whoami(self, q):
@@ -1187,6 +1245,7 @@ ROUTES_GET = {
     "planner": "planner_list", "softsearch": "software_search",
     "gposcript": "gpo_script", "diskforecast": "disk_forecast_ep",
     "selftest": "selftest", "meta": "meta", "whoami": "whoami",
+    "infra": "infra_list", "infradtype": "infra_dtype",
 }
 ROUTES_POST = {
     "settings": "settings_post",
@@ -1203,6 +1262,8 @@ ROUTES_POST = {
     "healthrecompute": "health_recompute", "backupcheck": "backup_check_now",
     "plannerdone": "planner_done", "invreport": "inv_report",
     "wol": "wol_wake", "lanalias": "lan_alias",
+    "infrascan": "infra_scan", "infradtype": "infra_dtype",
+    "idswl": "ids_wl_add",
 }
 
 
