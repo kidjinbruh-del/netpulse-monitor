@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetPulse</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 24 24"><path d="M12 3c4.5 0 8 3.5 8 8 0 5-5.5 9-8 10-2.5-1-8-5-8-10 0-4.5 3.5-8 8-8z"/><circle cx="12" cy="11" r="3"/><path d="M12 14v7"/></symbol>
+    <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="5" rx="2"/><rect x="13" y="11" width="8" height="10" rx="2"/><rect x="3" y="15" width="8" height="6" rx="2"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19H14a4 4 0 0 0 4-4V7.5"/><path d="M3 19h.5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15L6 16z"/><path d="M10 20a2 2 0 0 0 4 0"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></symbol>
+    <symbol id="i-apps" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-lan" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-2.5h12V16"/></symbol>
+    <symbol id="i-capture" viewBox="0 0 24 24"><path d="M4 17l4-8 3 5 3-9 3 7 3-3"/><rect x="2.5" y="4" width="19" height="16" rx="2"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l12 7.5-12 7.5v-15z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 3v4h-4"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V8m0 0l-5 5m5-5l5 5M5 4h14"/></symbol>
+    <symbol id="i-block" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.5 5.5l13 13"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3L2 20h20L12 3z"/><path d="M12 10v4m0 3v.5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6V2z"/><path d="M14 2v6h6M9 12h6M9 16h6"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  </defs>
+</svg>
+
+<div class="shell">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="logo">
+      <svg class="ic logo-ic"><use href="#i-logo"/></svg>
+      <div><div class="logo-name">NETPULSE</div><div class="logo-sub">network operations</div></div>
+    </div>
+
+    <nav id="nav">
+      <button data-view="dashboard" class="nav-btn active"><svg class="ic"><use href="#i-dash"/></svg>Дашборд</button>
+      <button data-view="apps" class="nav-btn"><svg class="ic"><use href="#i-apps"/></svg>Приложения<span id="apps-live-dot" class="live-dot hidden"></span></button>
+      <button data-view="traffic" class="nav-btn"><svg class="ic"><use href="#i-globe"/></svg>Соединения</button>
+      <button data-view="diag" class="nav-btn"><svg class="ic"><use href="#i-route"/></svg>Диагностика</button>
+      <button data-view="lan" class="nav-btn"><svg class="ic"><use href="#i-lan"/></svg>Локальная сеть</button>
+      <button data-view="capture" class="nav-btn"><svg class="ic"><use href="#i-capture"/></svg>Захват пакетов</button>
+      <button data-view="security" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Безопасность<span id="ids-badge" class="badge hidden">0</span></button>
+      <button data-view="ai" class="nav-btn"><svg class="ic"><use href="#i-chip"/></svg>AI-аналитика</button>
+      <button data-view="alerts" class="nav-btn"><svg class="ic"><use href="#i-bell"/></svg>Алерты<span id="alerts-badge" class="badge hidden">0</span></button>
+      <button data-view="history" class="nav-btn"><svg class="ic"><use href="#i-clock"/></svg>История</button>
+      <button data-view="settings" class="nav-btn"><svg class="ic"><use href="#i-gear"/></svg>Настройки</button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <label class="switch-row"><span>Тёмная тема</span>
+        <input type="checkbox" id="theme-toggle" checked><span class="slider"></span></label>
+      <div class="version" id="app-version"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="burger" onclick="document.getElementById('sidebar').classList.toggle('open')"><span></span><span></span><span></span></button>
+      <h1 id="view-title">Дашборд</h1>
+      <div class="topbar-right">
+        <div class="pill sys-pill" id="sys-pill" title="Процессор и память этой машины">
+          <span>CPU <b id="pill-cpu">—%</b></span><span>RAM <b id="pill-mem">—%</b></span>
+        </div>
+        <div class="pill" id="mode-pill" title="Режим трафика: Live=scapy, Net=psutil, Sim=симуляция"><span class="dot"></span><b>…</b></div>
+        <div class="pill quality-pill" id="quality-pill"><span class="dot"></span><span id="quality-text">—</span></div>
+        <div class="pill clock" id="clock">--:--:--</div>
+        <button class="icon-btn" title="Отчёт TXT" onclick="window.open('/report.txt')"><svg class="ic"><use href="#i-doc"/></svg></button>
+      </div>
+    </header>
+
+    <!-- ============ LOGIN OVERLAY ============ -->
+    <div id="login-overlay" class="overlay hidden">
+      <div class="card narrow login-card">
+        <div class="card-title"><svg class="ic"><use href="#i-lock"/></svg>Требуется токен доступа</div>
+        <input type="password" id="login-token" class="inp full" placeholder="Вставьте токен из настроек сервера">
+        <button class="btn accent" onclick="UI.login()">Войти</button>
+        <div id="login-error" class="err-text"></div>
+      </div>
+    </div>
+
+    <!-- ============ DASHBOARD ============ -->
+    <section class="view active" id="view-dashboard">
+      <div class="stat-grid four">
+        <div class="card stat"><div class="stat-label"><svg class="ic sm"><use href="#i-down"/></svg>Загрузка</div>
+          <div class="stat-value accent-cyan" id="st-down">0<span class="unit"> KB/s</span></div>
+          <canvas class="spark" id="spark-down"></canvas></div>
+        <div class="card stat"><div class="stat-label"><svg class="ic sm"><use href="#i-up"/></svg>Отдача</div>
+          <div class="stat-value accent-violet" id="st-up">0<span class="unit"> KB/s</span></div>
+          <canvas class="spark" id="spark-up"></canvas></div>
+        <div class="card stat"><div class="stat-label">Пинг / потери</div>
+          <div class="stat-value" id="st-ping">—<span class="unit"> ms</span></div>
+          <div class="stat-sub" id="st-ping-sub">джиттер — · потери —</div></div>
+        <div class="card stat center"><div class="stat-label">Качество связи</div>
+          <div class="gauge-wrap"><canvas id="gauge" width="120" height="120"></canvas>
+            <div class="gauge-center"><b id="gauge-num">100</b><small>/100</small></div></div>
+          <div class="stat-sub center" id="quality-label">—</div></div>
+      </div>
+
+      <div class="grid-2-1">
+        <div class="card chart-card">
+          <div class="card-title">Трафик в реальном времени
+            <span class="legend"><i class="lg lg-down"></i>загрузка<i class="lg lg-up"></i>отдача
+              <em id="fc-note" class="forecast-note hidden"></em></span></div>
+          <canvas id="chart-main" height="250"></canvas>
+        </div>
+        <div class="card session-card">
+          <div class="card-title">Сессия</div>
+          <div class="session-grid">
+            <div><span>Получено</span><b id="ss-total-down">0 MB</b></div>
+            <div><span>Отправлено</span><b id="ss-total-up">0 MB</b></div>
+            <div><span>Пик скорости</span><b id="ss-max">0 KB/s</b></div>
+            <div><span>Аптайм</span><b id="ss-uptime">0с</b></div>
+          </div>
+          <div class="card-title mt18">Прогноз AI</div>
+          <div id="dash-forecast" class="kv muted">собираем данные…</div>
+          <div class="card-title mt18">Квота трафика</div>
+          <div id="dash-quota" class="quota-box muted">лимиты не заданы</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ APPS ============ -->
+    <section class="view" id="view-apps">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Сетевая активность процессов
+            <span class="hint">I/O-прокси включает дисковую активность</span>
+            <button class="mini-btn right" onclick="UI.loadApps()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+          <table class="tbl" id="apps-table">
+            <thead><tr><th>Процесс</th><th>PID</th><th>Всего</th><th>Устан.</th><th>I/O KB/s</th><th></th></tr></thead>
+            <tbody></tbody></table>
+        </div>
+        <div class="card">
+          <div class="card-title">Новые подключения <span class="hint">в реальном времени</span>
+            <button class="mini-btn right" onclick="UI.loadNewConns()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+          <div id="newconn-feed" class="feed muted">пока тихо…</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CONNECTIONS ============ -->
+    <section class="view" id="view-traffic">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Интерфейсы
+            <button class="mini-btn right" onclick="UI.refreshInterfaces()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+          <table class="tbl mono" id="ifaces-table">
+            <thead><tr><th>Имя</th><th>IP</th><th>MAC</th><th>Статус</th><th>↓ KB/s</th><th>↑ KB/s</th></tr></thead>
+            <tbody></tbody></table>
+        </div>
+        <div class="card">
+          <div class="card-title">Соединения
+            <label class="inline-check"><input type="checkbox" id="show-listening">слушающие</label>
+            <button class="mini-btn right" onclick="UI.refreshConns()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+          <table class="tbl mono" id="conns-table">
+            <thead><tr><th>Процесс</th><th>Локально</th><th>Удалённо</th><th>Статус</th><th></th></tr></thead>
+            <tbody></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ DIAGNOSTICS ============ -->
+    <section class="view" id="view-diag">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Пинг-проба</div>
+          <div class="row"><input id="ping-target" class="inp grow" value="8.8.8.8" placeholder="IP или домен">
+            <button class="btn" onclick="UI.pingProbe()">Проверить</button></div>
+          <div id="ping-result" class="result-box muted">Введите адрес</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Живой MTR <span class="hint">непрерывный анализ маршрута</span></div>
+          <div class="row"><input id="mtr-target" class="inp grow" value="8.8.8.8" placeholder="цель">
+            <button class="btn accent" id="mtr-start-btn" onclick="UI.mtrStart()"><svg class="ic sm"><use href="#i-play"/></svg>Запустить</button>
+            <button class="btn ghost" onclick="UI.mtrStop()"><svg class="ic sm"><use href="#i-stop"/></svg>Стоп</button></div>
+          <div id="mtr-result" class="result-box muted">Не запущен</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Разовая трассировка</div>
+          <div class="row"><input id="trace-target" class="inp grow" value="8.8.8.8">
+            <button class="btn" onclick="UI.trace()">Маршрут</button>
+            <button class="btn ghost" onclick="UI.traceAll()">Все цели</button></div>
+          <div id="trace-result" class="result-box muted">—</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">DNS</div>
+          <div class="row">
+            <button class="btn" onclick="UI.dnsBest()">Лучший DNS</button>
+            <button class="btn ghost" onclick="UI.dnsResolve()">Замер резолва</button></div>
+          <div id="dns-result" class="result-box muted">—</div>
+        </div>
+
+        <div class="card wide">
+          <div class="card-title">Замер канала
+            <select id="speedtest-size" class="inp sel">
+              <option value="2000000">2 MB</option><option value="8000000" selected>8 MB</option>
+              <option value="32000000">32 MB</option></select>
+            <button class="btn accent" onclick="UI.speedtest()">Download</button>
+            <button class="btn" onclick="UI.speedtestUp()">Upload</button>
+            <button class="mini-btn right" onclick="UI.speedLog()"><svg class="ic sm"><use href="#i-clock"/></svg></button></div>
+          <div id="speedtest-result" class="result-box muted">Замер требует доступ к speed.cloudflare.com</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ LAN ============ -->
+    <section class="view" id="view-lan">
+      <div class="card">
+        <div class="card-title">Устройства в локальной сети
+          <button class="btn accent right" id="lan-scan-btn" onclick="UI.lanScan()"><svg class="ic sm"><use href="#i-search"/></svg>Сканировать подсеть</button>
+        </div>
+        <div id="lan-status" class="result-box muted">База известных устройств + сканирование ping-ом всех адресов /24, MAC и вендор из ARP</div>
+        <table class="tbl" id="lan-table">
+          <thead><tr><th>IP</th><th>MAC</th><th>Вендор</th><th>Hostname</th><th>Первый раз</th><th>Последний раз</th><th></th></tr></thead>
+          <tbody></tbody></table>
+      </div>
+    </section>
+
+    <!-- ============ CAPTURE ============ -->
+    <section class="view" id="view-capture">
+      <div class="card">
+        <div class="card-title">Захват IPv4-пакетов (raw socket)
+          <select id="capture-proto" class="inp sel right">
+            <option value="">все протоколы</option><option>TCP</option><option>UDP</option><option>ICMP</option>
+          </select>
+          <button class="btn accent right" id="capture-toggle" onclick="UI.captureToggle()"><svg class="ic sm"><use href="#i-play"/></svg>Старт</button>
+        </div>
+        <div id="capture-status" class="result-box muted">Захват работает только при запуске от администратора (SIO_RCVALL)</div>
+        <div id="capture-stats" class="chips-row hidden"></div>
+        <table class="tbl mono" id="capture-table">
+          <thead><tr><th>Время</th><th>Протокол</th><th>Источник</th><th>Назначение</th><th>Порты</th><th>Байт</th></tr></thead>
+          <tbody></tbody></table>
+      </div>
+    </section>
+
+    <!-- ============ SECURITY ============ -->
+    <section class="view" id="view-security">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Сканер системы
+            <span class="right">
+              <button class="btn ghost" onclick="UI.securityScan(true)">Быстрый</button>
+              <button class="btn danger" onclick="UI.securityScan(false)">Полный скан</button></span></div>
+          <div id="security-status" class="result-box muted">Не запускался</div>
+          <div id="security-results"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">IDS: события обнаружений
+            <button class="mini-btn right" onclick="UI.loadIds()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+          <div id="ids-feed" class="feed muted">детекторы сканов портов и подозрительных портов активны</div>
+        </div>
+        <div class="card wide">
+          <div class="card-title">Сканер портов хоста
+            <div class="row inline"><input id="pscan-host" class="inp" value="192.168.1.1" placeholder="хост">
+              <button class="btn" onclick="UI.portScan()"><svg class="ic sm"><use href="#i-search"/></svg>Сканировать</button></div></div>
+          <div id="pscan-result" class="result-box muted">TCP connect по 30 популярным портам</div>
+        </div>
+        <div class="card wide">
+          <div class="card-title">Windows Firewall — правила NetPulse
+            <button class="mini-btn right" onclick="UI.fwList()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+          <div id="fw-list" class="feed muted">блокируйте IP из таблицы соединений или приложений — правила появятся здесь</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ AI ============ -->
+    <section class="view" id="view-ai">
+      <div class="stat-grid four">
+        <div class="card stat"><div class="stat-label">Модель IsolationForest</div>
+          <div class="stat-value small" id="ai-model">—</div></div>
+        <div class="card stat"><div class="stat-label">Анализов всего</div>
+          <div class="stat-value" id="ai-analyzed">0</div></div>
+        <div class="card stat"><div class="stat-label">Аномалий поймано</div>
+          <div class="stat-value" id="ai-anomalies-n">0</div></div>
+        <div class="card stat"><div class="stat-label">Прогноз на 5 мин</div>
+          <div class="stat-value small" id="ai-prediction">—</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Обучение и прогноз
+          <button class="btn accent right" onclick="UI.aiTrain()"><svg class="ic sm"><use href="#i-zap"/></svg>Обучить на истории</button></div>
+        <div id="ai-train-status" class="result-box muted">Фоновое дообучение каждые 5 минут</div>
+      </div>
+      <div class="card"><div class="card-title">Лента аномалий с объяснениями</div>
+        <div id="ai-anomaly-feed" class="feed muted">Пока пусто — это хорошо.</div></div>
+    </section>
+
+    <!-- ============ ALERTS ============ -->
+    <section class="view" id="view-alerts">
+      <div class="card">
+        <div class="card-title">Журнал алертов
+          <button class="btn ghost right" onclick="UI.ackAll()"><svg class="ic sm"><use href="#i-check"/></svg>Принять все</button></div>
+        <div id="alerts-feed" class="feed muted">Загрузка…</div>
+      </div>
+    </section>
+
+    <!-- ============ HISTORY ============ -->
+    <section class="view" id="view-history">
+      <div class="card">
+        <div class="card-title">История трафика и пинга
+          <select id="hist-range" class="inp sel right" onchange="UI.loadHistory()">
+            <option value="1">1 час</option><option value="6">6 часов</option>
+            <option value="24" selected>24 часа</option><option value="168">7 дней</option>
+          </select></div>
+        <canvas id="chart-hist" height="220"></canvas>
+        <div class="card-title mt18">Джиттер и потери</div>
+        <canvas id="chart-hist-ping" height="150"></canvas>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="view" id="view-settings">
+      <div class="grid-2">
+        <div class="card narrow">
+          <div class="card-title">Мониторинг и качество</div>
+          <div class="form-grid">
+            <label>Цель пинга</label><input id="set-ping-target" class="inp">
+            <label>Хороший пинг, ms</label><input id="set-good-ping" type="number" class="inp">
+            <label>Тревожный пинг, ms</label><input id="set-warn-ping" type="number" class="inp">
+            <label>Макс. джиттер, ms</label><input id="set-max-jitter" type="number" class="inp">
+            <label>Макс. потери, %</label><input id="set-max-loss" type="number" class="inp">
+          </div>
+          <div class="card-title mt18">Квоты трафика</div>
+          <div class="form-grid">
+            <label>Дневной лимит, MB (0=нет)</label><input id="set-quota-day" type="number" class="inp">
+            <label>Месячный лимит, GB (0=нет)</label><input id="set-quota-month" type="number" class="inp">
+          </div>
+          <div class="card-title mt18">AI и данные</div>
+          <div class="form-grid">
+            <label>AI включён</label><label class="switch-row"><input type="checkbox" id="set-ai-enabled"><span class="slider"></span></label>
+            <label>Порог аномалий</label><input id="set-anomaly" type="number" step="0.05" class="inp">
+            <label>Очистка БД старше, дней</label><input id="set-cleanup" type="number" class="inp">
+          </div>
+          <div class="card-title mt18">Безопасность</div>
+          <div class="form-grid">
+            <label>Подозрительные порты</label><input id="set-ports" class="inp">
+            <label>Порог IDS (портов за окно)</label><input id="set-ids-th" type="number" class="inp">
+          </div>
+          <div class="row end"><button class="btn accent" onclick="UI.saveSettings()">Сохранить и применить</button></div>
+        </div>
+
+        <div class="card narrow">
+          <div class="card-title">Доступ и уведомления</div>
+          <div class="form-grid">
+            <label>Авторизация в веб</label>
+            <label class="switch-row"><input type="checkbox" id="set-auth"><span class="slider"></span></label>
+            <label>Токен</label>
+            <div class="row inline"><input id="set-token" class="inp grow mono" readonly>
+              <button class="mini-btn" title="Сгенерировать новый" onclick="UI.regenToken()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+            <label>Telegram уведомления</label>
+            <label class="switch-row"><input type="checkbox" id="set-tg-on"><span class="slider"></span></label>
+            <label>Bot token</label><input id="set-tg-token" class="inp">
+            <label>Chat ID</label><input id="set-tg-chat" class="inp">
+          </div>
+          <div class="card-title mt18">Автобэкап (WinRAR)</div>
+          <div class="form-grid">
+            <label>Включён</label><label class="switch-row"><input type="checkbox" id="set-backup-on"><span class="slider"></span></label>
+            <label>Время (ЧЧ:ММ)</label><input id="set-backup-time" class="inp" placeholder="03:00">
+            <label>Хранить копий</label><input id="set-backup-keep" type="number" class="inp">
+          </div>
+          <div class="row end">
+            <button class="btn" onclick="UI.backupRun()"><svg class="ic sm"><use href="#i-doc"/></svg>Копия сейчас</button>
+            <button class="btn accent" onclick="UI.saveSettings()">Сохранить всё</button></div>
+          <div id="settings-status" class="result-box muted mt10"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div id="toast-wrap"></div>
+<script src="/app.js"></script>
+</body>
+</html>
