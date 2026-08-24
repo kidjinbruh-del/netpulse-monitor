@@ -237,6 +237,22 @@ def test_server_public_mode():
         httpd.shutdown()
 
 
+def test_reports_require_auth():
+    """Отчёты содержат данные — при включённом auth тоже под замком."""
+    httpd, port, cfg = _start_server(
+        {"web_auth_enabled": True, "web_token": "secret123"})
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for p in ("/journal.txt", "/journal.csv", "/report.txt"):
+            code, _ = _get(base + p)
+            assert code == 401, f"{p} без токена: {code}"
+        for p in ("/journal.txt", "/journal.csv", "/report.txt"):
+            code, _ = _get(base + p, {"X-Auth": "secret123"})
+            assert code == 200, f"{p} с токеном: {code}"
+    finally:
+        httpd.shutdown()
+
+
 ALL = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

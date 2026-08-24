@@ -1212,7 +1212,8 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
         qs = parse_qs(parsed.query)
 
-        if path.startswith("/api/") or path == "/metrics":
+        if (path.startswith("/api/") or path == "/metrics"
+                or path in ("/journal.txt", "/journal.csv", "/report.txt")):
             if not self._authed(qs):
                 self._send_json({"error": "unauthorized"}, 401)
                 return
