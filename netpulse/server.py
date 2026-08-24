@@ -1177,6 +1177,36 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, 500)
             return
 
+        if path == "/journal.csv":
+            try:
+                days = min(max(int(qs.get("days", ["30"])[0] or 30), 1), 365)
+            except ValueError:
+                days = 30
+            try:
+                import csv as _csv
+                import io as _io
+                buf = _io.StringIO()
+                w = _csv.writer(buf, delimiter=";", lineterminator="\r\n")
+                w.writerow(["Дата/время", "Источник", "Кто/где",
+                            "Машина", "Минуты", "Запись"])
+                for e in self.api.svc.journal.list_entries(1000):
+                    w.writerow([e["timestamp"][:19], e["source"],
+                                e["user_name"] or "", e["host"] or "",
+                                e["minutes"] or 0, e["text"]])
+                data = buf.getvalue().encode("utf-8-sig")
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 "text/csv; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="netpulse_journal_{days}d.csv"')
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
         if path == "/journal.txt":
             try:
                 days = min(max(int(qs.get("days", ["30"])[0] or 30), 1), 365)
@@ -1188,12 +1218,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type",
                                  "text/plain; charset=utf-8")
                 self.send_header("Content-Length",
-                                 str(len(body.encode("utf-8"))))
+                                 str(len(body.encode("utf-8-sig"))))
                 self.send_header(
                     "Content-Disposition",
                     f'attachment; filename="netpulse_otchet_{days}d.txt"')
                 self.end_headers()
-                self.wfile.write(body.encode("utf-8"))
+                self.wfile.write(body.encode("utf-8-sig"))
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
             return
@@ -1337,13 +1367,47 @@ def run(config):
     service = MonitorService(config)
     backup_mgr = BackupManager(config)
     port = int(config.get("web_port", 8770))
+    host = str(config.get("web_host") or "127.0.0.1").strip()
+
+    # --- предохранитель: наружу наружу — только с токеном ---
+    loopback = host in ("127.0.0.1", "localhost", "::1", "")
+    if not loopback and (not config.get("web_auth_enabled")
+                         or not config.get("web_token")):
+        config["web_auth_enabled"] = True
+        if not config.get("web_token"):
+            config["web_token"] = uuid.uuid4().hex
+        try:
+            from .config import save_config
+            save_config(config)
+        except Exception:
+            pass
+        print("[netpulse] ВНИМАНИЕ: веб-интерфейс открыт в локальную сеть — "
+              "авторизация включена принудительно, токен сгенерирован "
+              "(config.json -> web_token)")
 
     service.start()
     if config.get("backup", {}).get("enabled"):
         backup_mgr.start()
 
-    httpd = build_server(service, config, backup_mgr, port=port)
-    url = f"http://127.0.0.1:{port}"
+    httpd = build_server(service, config, backup_mgr, host=host, port=port)
+    if loopback:
+        url = f"http://127.0.0.1:{port}"
+    else:
+        ips = []
+        try:
+            import socket as _s
+            for addrs in psutil.net_if_addrs().values():
+                for a in addrs:
+                    if a.family == _s.AF_INET and not a.address.startswith("127."):
+                        ips.append(a.address)
+        except Exception:
+            pass
+        url = " | ".join(f"http://{ip}:{port}" for ip in ips) or \
+              f"http://{host}:{port}"
+        print("[netpulse] доступ из локальной сети (нужен токен):", url)
+        print("[netpulse] правило firewall (если попросит админ):")
+        print(f'  netsh advfirewall firewall add rule name="NetPulse" '
+              f'dir=in action=allow protocol=TCP localport={port}')
     print(f"[netpulse] дашборд: {url}")
 
     def _open():

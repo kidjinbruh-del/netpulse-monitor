@@ -11,6 +11,7 @@ CONFIG_FILE = "config.json"
 
 DEFAULTS = {
     "web_port": 8770,
+    "web_host": "127.0.0.1",
     "web_auth_enabled": False,
     "web_token": "",
     "theme": "dark",

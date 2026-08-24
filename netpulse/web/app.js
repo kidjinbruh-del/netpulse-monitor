@@ -1229,6 +1229,9 @@ const UI = {
   downloadReport() {
     location.href = "/journal.txt?days=30" + Auth.suffix();
   },
+  downloadCsv() {
+    location.href = "/journal.csv?days=30" + Auth.suffix();
+  },
 
   /* ---------- софт парка ---------- */
   async softSearch() {

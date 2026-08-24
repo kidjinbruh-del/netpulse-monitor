@@ -1,0 +1,23 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Установка зависимостей
+        run: |
+          pip install psutil scikit-learn pandas numpy
+
+      - name: Тесты ядра
+        run: python -m tests.test_core
+
+      - name: Тесты NetPulse
+        run: python -m tests.test_netpulse
