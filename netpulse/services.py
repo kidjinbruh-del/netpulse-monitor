@@ -454,7 +454,8 @@ class LANNetworkScanner:
     def devices_from_db(self, limit=200):
         try:
             return self.svc.db.execute(
-                """SELECT mac, ip, hostname, vendor, first_seen, last_seen
+                """SELECT mac, ip, hostname, vendor, first_seen, last_seen,
+                          alias
                    FROM lan_devices ORDER BY last_seen DESC LIMIT ?""",
                 (limit,), fetch=True) or []
         except Exception:
@@ -749,6 +750,11 @@ class MonitorService:
                 mac TEXT PRIMARY KEY,
                 ip TEXT, hostname TEXT, vendor TEXT,
                 first_seen TEXT, last_seen TEXT)""")
+            lcols = [r["name"] for r in (self.db.execute(
+                "PRAGMA table_info(lan_devices)", fetch=True) or [])]
+            if lcols and "alias" not in lcols:
+                self.db.execute(
+                    "ALTER TABLE lan_devices ADD COLUMN alias TEXT")
             self.db.execute("""CREATE TABLE IF NOT EXISTS speedtest_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,

@@ -621,6 +621,16 @@ class Api:
     def lan_devices(self, q):
         return {"devices": self.svc.lan.devices_from_db()}
 
+    def lan_alias(self, q):
+        body = self._read_body()
+        mac = str(body.get("mac") or "").strip()
+        alias = str(body.get("alias") or "").strip()[:80]
+        if not re.match(r"^[0-9A-Fa-f:\.\-]{12,17}$", mac):
+            return (400, {"error": "некорректный MAC"})
+        n = self.svc.db.execute(
+            "UPDATE lan_devices SET alias = ? WHERE mac = ?", (alias, mac))
+        return {"ok": bool(n), "mac": mac, "alias": alias}
+
     def port_scan(self, q):
         body = self._read_body()
         host = str(body.get("host", "")).strip()
@@ -1040,7 +1050,7 @@ ROUTES_POST = {
     "runbookexec": "runbook_exec", "watchdogpoll": "watchdog_poll",
     "healthrecompute": "health_recompute", "backupcheck": "backup_check_now",
     "plannerdone": "planner_done", "invreport": "inv_report",
-    "wol": "wol_wake",
+    "wol": "wol_wake", "lanalias": "lan_alias",
 }
 
 

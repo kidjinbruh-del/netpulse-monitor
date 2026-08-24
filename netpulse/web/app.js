@@ -695,19 +695,40 @@ const UI = {
   renderLan(devices, dbDevices) {
     const map = {};
     for (const d of dbDevices || []) map[d.mac] = d;
+    // живой скан + устройства из базы, которых в скане не было
+    const seen = new Set(devices.map(d => d.mac));
+    const merged = [...devices];
+    for (const m of dbDevices || []) {
+      if (!seen.has(m.mac))
+        merged.push({ ip: m.ip, mac: m.mac, vendor: m.vendor,
+                      hostname: m.hostname, is_new: false, from_db: true });
+    }
     const tb = $("lan-table").querySelector("tbody");
-    tb.innerHTML = devices.map(d => `
+    tb.innerHTML = merged.map(d => `
       <tr>
         <td class="mono">${esc(d.ip)}</td>
         <td class="mono">${esc(d.mac)}</td>
         <td>${esc(d.vendor || "—")} ${d.is_new ? '<span class="new-badge">NEW</span>' : ""}</td>
         <td>${esc(d.hostname || "-")}</td>
+        <td><input class="inp" style="width:140px" placeholder="что это за комп"
+             value="${esc(map[d.mac]?.alias || "")}"
+             data-mac="${esc(d.mac)}" onchange="UI.saveAlias(this)"></td>
         <td class="muted">${esc((map[d.mac]?.first_seen || "—").slice(0, 16).replace("T", " "))}</td>
         <td class="muted">${esc((d.is_me ? "это этот ПК" : (map[d.mac]?.last_seen || "").slice(0, 16).replace("T", " ") || "—"))}</td>
         <td><button class="mini-btn" title="Скан портов устройства"
           onclick="document.getElementById('pscan-host').value='${esc(d.ip)}';UI.portScan()">
           <svg class="ic sm"><use href="#i-search"/></svg></button></td>
-      </tr>`).join("") || '<tr><td colspan=7 class=muted>устройств не найдено</td></tr>';
+      </tr>`).join("") || '<tr><td colspan=8 class=muted>устройств не найдено</td></tr>';
+  },
+  async saveAlias(input) {
+    try {
+      const r = await apiPost("lanalias", {
+        mac: input.dataset.mac,
+        alias: input.value.trim(),
+      });
+      if (r.ok) toast("Алиас сохранён");
+      else toast(r.error || "не сохранено", true);
+    } catch (e) { toast(String(e), true); }
   },
   async lanDevices() {
     try {
