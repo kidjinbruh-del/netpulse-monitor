@@ -213,6 +213,13 @@ class ParkWatchdog:
                     continue
                 seen.add(v)
                 out.append(v)
+        # главный узел (эта машина) — всегда первый, локальный сбор без WinRM
+        try:
+            me = socket.gethostname()
+            if me.lower() not in {x.lower() for x in out}:
+                out.insert(0, me)
+        except Exception:
+            pass
         return out[:60]
 
     def poll_cycle(self):

@@ -742,6 +742,9 @@ const UI = {
   async lanDevices() {
     try {
       const d = await apiGet("landevices");
+      if (d.subnet)
+        this.setBox("lan-status",
+          `Подсеть <b>${esc(d.subnet)}</b> · главный узел: <b>${esc(d.self_name)}</b> (${esc(d.self_ip)}) · устройств в базе: ${d.devices.length}`);
       if (!($("lan-table").querySelector("tbody").children.length))
         this.renderLan([], d.devices);
     } catch (e) { void e; }

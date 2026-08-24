@@ -46,6 +46,9 @@ DEFAULTS = {
         "enabled": True,
         "window_sec": 120
     },
+    "lan": {
+        "auto_scan_min": 10
+    },
     "diagnostics": {
         "trace_targets": ["8.8.8.8", "1.1.1.1", "77.88.8.8"],
         "resolve_hosts": ["google.com", "youtube.com", "vk.com", "github.com", "wikipedia.org"]

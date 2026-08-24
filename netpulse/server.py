@@ -6,6 +6,7 @@ REST + SSE-стрим живого состояния + Prometheus /metrics + au
 
 import hmac
 import json
+import socket
 import time
 import uuid
 import re
@@ -661,7 +662,17 @@ class Api:
         return (504, {"error": "скан превысил таймаут"})
 
     def lan_devices(self, q):
-        return {"devices": self.svc.lan.devices_from_db()}
+        try:
+            base, my_ip = self.svc.lan.local_subnet()
+            subnet = f"{base}0/24"
+        except Exception:
+            base, my_ip, subnet = "", "", ""
+        try:
+            self_name = socket.gethostname()
+        except Exception:
+            self_name = ""
+        return {"devices": self.svc.lan.devices_from_db(),
+                "subnet": subnet, "self_ip": my_ip, "self_name": self_name}
 
     def lan_alias(self, q):
         body = self._read_body()

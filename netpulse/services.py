@@ -359,6 +359,15 @@ class LANNetworkScanner:
         parts = ip.split(".")
         return ".".join(parts[:3]) + ".", ip
 
+    def auto_loop(self, interval_min: int):
+        """Периодический автоскан подсети: новые ПК попадают в базу сами."""
+        while not self.svc._stop_event.is_set():
+            try:
+                self.scan()
+            except Exception as e:
+                print(f"[lan] auto-scan: {e}")
+            self.svc._stop_event.wait(max(60, int(interval_min) * 60))
+
     def arp_table(self):
         table = {}
         try:
@@ -796,6 +805,13 @@ class MonitorService:
             self.backupwatch.start()
         if self.cfg.get("planner", {}).get("enabled"):
             self.planner.start()
+
+        auto_min = int((self.cfg.get("lan") or {}).get("auto_scan_min", 0) or 0)
+        if auto_min > 0:
+            t = threading.Thread(target=self.lan.auto_loop, args=(auto_min,),
+                                 daemon=True, name="np-lanscan")
+            t.start()
+            self._threads.append(t)
 
         admin = _is_admin()
         with self._lock:
