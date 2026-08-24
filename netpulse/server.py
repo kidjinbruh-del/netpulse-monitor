@@ -974,7 +974,7 @@ class Api:
     def planner_done(self, q):
         body = self._read_body()
         name = str(body.get("name") or "").strip()
-        actor = (getattr(self.api, "_cached_actor", None)
+        actor = (getattr(self, "_cached_actor", None)
                  or str(body.get("actor") or "admin"))
         return self.svc.planner.mark_done(name, actor=actor)
 
@@ -1011,7 +1011,7 @@ class Api:
         rb = str(body.get("name") or "").strip()
         params = body.get("params") if isinstance(body.get("params"), dict) \
             else {}
-        actor = (getattr(self.api, "_cached_actor", None)
+        actor = (getattr(self, "_cached_actor", None)
                  or str(body.get("actor") or "admin"))
         res = self.svc.runbooks.execute(rb, params, actor)
         code = 200 if res.get("ok") else 400
