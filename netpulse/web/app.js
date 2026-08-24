@@ -1007,8 +1007,9 @@ const UI = {
   /* ---------- парк ПК / сторож / runbooks ---------- */
   async loadPark() {
     try {
-      const [h, ev, rb] = await Promise.all([
-        apiGet("hosts"), apiGet("events?limit=60"), apiGet("runbooks")]);
+      const [h, ev, rb, fc] = await Promise.all([
+        apiGet("hosts"), apiGet("events?limit=60"), apiGet("runbooks"),
+        apiGet("diskforecast")]);
       const wd = h.watchdog || {};
       $("park-status").textContent = wd.running
         ? `Сторож активен: обход каждые ${wd.interval_min} мин, машин в списке: ${wd.hosts.length}`
@@ -1047,6 +1048,22 @@ const UI = {
                <span class="muted">${esc(b.description || b.scope)}${b.params?.length ? " · параметры: " + esc(b.params.join(", ")) : ""}</span>
              </div>`).join("")
         : "Runbooks не найдены";
+      const fc = fcResp.forecasts || [];
+      $("disk-fc-status").textContent = fc.length
+        ? `Прогноз по наклону за последние недели — машин на грани: ${fc.length}`
+        : "История ещё копится: нужно 2+ замера за несколько дней (сторож сам пишет каждый обход)";
+      $("diskfc-table").querySelector("tbody").innerHTML = fc.length
+        ? fc.map(f => {
+            const c = f.days_left <= 14 ? "#ff5c74" : f.days_left <= 45 ? "#f5b942" : "#22d3a7";
+            return `<tr>
+              <td>${esc(f.host)}</td>
+              <td class="mono">${esc(f.drive)}</td>
+              <td class="mono">${f.free_gb} GB</td>
+              <td class="mono muted">${f.rate_gb_day} GB/день</td>
+              <td><b style="color:${c}">~${f.days_left} дн</b></td>
+            </tr>`;
+          }).join("")
+        : "";
     } catch (e) { toast(String(e), true); }
   },
   async watchdogPoll() {
@@ -1085,36 +1102,72 @@ const UI = {
   },
 
   /* ---------- карточка машины ---------- */
+  _curHost: null,
   async showHost(id) {
     try {
       const d = await apiGet(`hostdetail?id=${id}`);
       if (d.error) { toast(d.error, true); return; }
+      this._curHost = { name: d.name, ip: d.ip || d.name };
       const el = $("park-detail");
       const score = d.health_score ?? 100;
       const color = score >= 80 ? "#22d3a7" : score >= 50 ? "#f5b942" : "#ff5c74";
       let html =
         `<div style="display:flex;justify-content:space-between;align-items:center">
            <b>${esc(d.name)}</b>
-           <button class="mini-btn" onclick="document.getElementById('park-detail').classList.add('hidden')">✕</button>
+           <span>
+             <a class="btn ghost" href="/api/rdp?host=${encodeURIComponent(d.ip || d.name)}${Auth.suffix()}">RDP</a>
+             <button class="btn ghost" onclick="UI.wakeCur()">WoL</button>
+             <button class="btn ghost" onclick="UI.pingCur()">Ping</button>
+             <button class="mini-btn" onclick="document.getElementById('park-detail').classList.add('hidden')">✕</button>
+           </span>
          </div>
          <div class="muted">${esc(d.os || "")} · ${esc(d.ip || "ip?")} ·
            ${d.online ? "в сети" : "офлайн"} · карма <span style="color:${color}"><b>${score}</b></span></div>` +
         (d.cpu ? `<div class="muted">CPU: ${esc(d.cpu)}${d.ram_gb ? " · RAM: " + esc(d.ram_gb) + " GB" : ""}</div>` : "");
+      if (d.karma_hist && d.karma_hist.length >= 2) {
+        html += `<div class="muted">Карма (динамика): ${this.sparkline(d.karma_hist)}
+                 <span class="mono">${Math.min(...d.karma_hist)}…${Math.max(...d.karma_hist)}</span></div>`;
+      }
       if (d.software?.length)
         html += `<div class="muted" style="margin-top:4px">Установлено ПО: ${d.software.length} позиций (поиск — ниже)</div>`;
-      if (d.events.length) {
-        html += `<div class="muted" style="margin-top:6px">События:</div>` +
-          d.events.slice(0, 5).map(e =>
-            `<div>[${esc(String(e.timestamp).slice(5, 16).replace("T", " "))}] ${esc(e.severity)} ${esc(e.kind)}: ${esc(e.text)}</div>`).join("");
-      }
-      if (d.journal.length) {
-        html += `<div class="muted" style="margin-top:6px">Работы:</div>` +
-          d.journal.slice(0, 5).map(j =>
-            `<div>[${esc(String(j.timestamp).slice(5, 16).replace("T", " "))}] ${esc(j.text)}${j.minutes ? ` (${j.minutes} мин)` : ""}</div>`).join("");
-      }
-      el.innerHTML = html || "нет данных";
+      const oldPing = $("card-ping-out");
+      if (oldPing) oldPing.remove();
+      el.innerHTML = html;
       el.classList.remove("hidden");
     } catch (e) { toast(String(e), true); }
+  },
+  sparkline(values) {
+    const chars = "▁▂▃▄▅▆▇█";
+    const mn = Math.min(...values), mx = Math.max(...values);
+    const span = (mx - mn) || 1;
+    return `<span class="mono" style="letter-spacing:1px">${values.map(v =>
+      chars[Math.round((v - mn) / span * 7)]).join("")}</span>`;
+  },
+  async wakeCur() {
+    if (!this._curHost) return;
+    try {
+      const r = await apiPost("wol", { host: this._curHost.ip || this._curHost.name });
+      if (r.ok) { toast(`Magic packet отправлен (${r.mac})`); }
+      else { toast(r.error, true); }
+    } catch (e) { toast(String(e), true); }
+  },
+  async pingCur() {
+    if (!this._curHost) return;
+    const target = encodeURIComponent(this._curHost.ip || this._curHost.name);
+    let out = $("card-ping-out");
+    if (!out) {
+      out = document.createElement("div");
+      out.id = "card-ping-out";
+      out.className = "result-box mono";
+      $("park-detail").appendChild(out);
+    }
+    out.textContent = "Пингуем...";
+    try {
+      const r = await apiGet(`ping?target=${target}&count=4`);
+      const ok = r.results.filter(x => x.ok).length;
+      out.textContent = `Ping ${this._curHost.ip || this._curHost.name}: ` +
+        `ответили ${ok}/4, avg ${r.avg_ms ?? "—"} ms, потери ${r.loss_pct}%`;
+    } catch (e) { out.textContent = String(e); }
   },
 
   /* ---------- плановые работы ---------- */

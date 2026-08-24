@@ -19,6 +19,14 @@ def _now_iso():
 class Inventory:
     def __init__(self, service):
         self.svc = service
+        self.svc.db.execute(
+            """CREATE TABLE IF NOT EXISTS karma_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                host_id INTEGER NOT NULL,
+                score INTEGER)""")
+        self.svc.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_karma_host ON karma_history(host_id)")
         # миграция старых баз: железо в карточке машины
         cols = [r["name"] for r in (self.svc.db.execute(
             "PRAGMA table_info(hosts)", fetch=True) or [])]
@@ -175,9 +183,33 @@ class Inventory:
             self.svc.db.execute(
                 "UPDATE hosts SET health_score = ?, updated_at = ? WHERE id = ?",
                 (score, _now_iso(), r["id"]))
+            # снапшот истории: не чаще раза в 6 часов на машину
+            last = self.svc.db.execute(
+                """SELECT timestamp FROM karma_history WHERE host_id = ?
+                   ORDER BY id DESC LIMIT 1""", (r["id"],), fetch=True)
+            need_snapshot = True
+            if last:
+                try:
+                    age_h = ((datetime.now()
+                              - datetime.fromisoformat(last[0]["timestamp"]))
+                             .total_seconds() / 3600.0)
+                    need_snapshot = age_h >= 6
+                except Exception:
+                    pass
+            if need_snapshot:
+                self.svc.db.execute(
+                    """INSERT INTO karma_history (timestamp, host_id, score)
+                       VALUES (?,?,?)""", (_now_iso(), r["id"], score))
             changed += 1
         logger.info("Карма пересчитана для %s машин", changed)
         return {"ok": True, "hosts": changed}
+
+    def karma_history(self, host_id, limit=120):
+        rows = self.svc.db.execute(
+            """SELECT score FROM karma_history WHERE host_id = ?
+               ORDER BY id DESC LIMIT ?""",
+            (host_id, min(max(int(limit), 2), 400)), fetch=True) or []
+        return [r["score"] for r in reversed(rows)]
 
     def worst_hosts(self, n=5):
         return self.svc.db.execute(

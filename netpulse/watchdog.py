@@ -48,6 +48,14 @@ def _now_iso():
 class ParkWatchdog:
     def __init__(self, service):
         self.svc = service
+        self.svc.db.execute(
+            """CREATE TABLE IF NOT EXISTS disk_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                host_id INTEGER, drive TEXT,
+                free_gb REAL, total_gb REAL)""")
+        self.svc.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_diskhist ON disk_history(host_id, drive)")
         self._stop = threading.Event()
         self._fail_streak = {}
         self._thread = None
@@ -168,7 +176,24 @@ class ParkWatchdog:
                            f"{datetime.now():%Y%m%d}", dedup_hours=6)
         self._fail_streak[host] = 0
         problems = self._apply_rules(host, hid, data) if hid else 0
+        if hid:
+            self._record_disks(hid, data.get("disks") or [])
         logger.debug("Сторож: %s ок (проблем: %s)", host, problems)
+
+    def _record_disks(self, host_id, disks):
+        rows = []
+        for d in disks or []:
+            try:
+                rows.append(((_now_iso()), host_id, str(d.get("drive")),
+                             float(d.get("free") or 0),
+                             float(d.get("total") or 0)))
+            except (ValueError, TypeError):
+                continue
+        if rows:
+            self.svc.db.execute_many(
+                """INSERT INTO disk_history
+                   (timestamp, host_id, drive, free_gb, total_gb)
+                   VALUES (?,?,?,?,?)""", rows)
 
     def poll_cycle(self):
         """Один обход всего списка. Вызывается по расписанию или вручную."""
@@ -182,10 +207,58 @@ class ParkWatchdog:
             except Exception as e:
                 logger.warning("Сторож: сбой по %s: %s", host, e)
         try:
+            self.svc.db.execute(
+                """DELETE FROM disk_history
+                   WHERE timestamp < datetime('now','localtime','-180 days')""")
             self.svc.inventory.recompute_health()
         except Exception as e:
             logger.warning("Карма не пересчитана: %s", e)
         return {"ok": True, "polled": len(hosts)}
+
+    def disk_forecast(self, window_days=21, horizon_days=90):
+        """Прогноз заполнения: по наклону свободного места за окно."""
+        rows = self.svc.db.execute(
+            """SELECT h.name AS host, dh.drive,
+                      MIN(dh.timestamp) AS t0, MAX(dh.timestamp) AS t1,
+                      (SELECT free_gb FROM disk_history x
+                       WHERE x.host_id = dh.host_id AND x.drive = dh.drive
+                       ORDER BY id DESC LIMIT 1) AS free_now
+               FROM disk_history dh JOIN hosts h ON h.id = dh.host_id
+               WHERE dh.timestamp > datetime('now','localtime', ? || ' days')
+               GROUP BY dh.host_id, dh.drive""",
+            (f"-{max(7, int(window_days))}",), fetch=True) or []
+
+        out = []
+        for r in rows:
+            pair = self.svc.db.execute(
+                """SELECT free_gb, timestamp FROM disk_history
+                   WHERE host_id = (SELECT id FROM hosts WHERE name = ?)
+                     AND drive = ?
+                   ORDER BY timestamp LIMIT 2""",
+                (r["host"], r["drive"]), fetch=True)
+            if not pair or len(pair) < 2:
+                continue
+            first_free = float(pair[0]["free_gb"] or 0)
+            last_free = float(r["free_now"] or 0)
+            try:
+                span_days = max(0.5, (datetime.fromisoformat(r["t1"])
+                                      - datetime.fromisoformat(pair[0]["timestamp"])
+                                      ).total_seconds() / 86400.0)
+            except Exception:
+                continue
+            if span_days < 0.75:
+                continue
+            slope = (last_free - first_free) / span_days  # GB в день
+            if slope >= -0.02:
+                continue  # не убывает или почти статичен
+            days_left = int(last_free / (-slope))
+            if days_left > horizon_days:
+                continue
+            out.append({"host": r["host"], "drive": r["drive"],
+                        "free_gb": round(last_free, 1),
+                        "rate_gb_day": round(slope, 2),
+                        "days_left": days_left})
+        return sorted(out, key=lambda x: x["days_left"])
 
     # ---------- жизненный цикл ----------
 

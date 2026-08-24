@@ -844,6 +844,7 @@ class Api:
         if d.get("error"):
             return (404, d)
         d["software"] = self.svc.softwareinv.for_host(hid, 200)
+        d["karma_hist"] = self.svc.inventory.karma_history(hid)
         return d
 
     def software_search(self, q):
@@ -932,6 +933,47 @@ class Api:
             time.sleep(1)
         return (504, {"error": "проверка превысила таймаут"})
 
+    # ----- действия на машине -----
+
+    def disk_forecast_ep(self, q):
+        return {"forecasts": self.svc.watchdog.disk_forecast()}
+
+    def wol_wake(self, q):
+        body = self._read_body()
+        return self.svc_wol().wake(body.get("host"))
+
+    def rdp_download(self, q, handler):
+        host = (q.get("host", [""])[0] or "").strip()
+        if not SAFE_TARGET.match(host):
+            self._send_json({"error": "некорректный хост"}, 400)
+            return
+        content = (
+            "screen mode id:i:2\r\n"
+            f"full address:s:{host}\r\n"
+            "username:s:\r\n"
+            "compression:i:1\r\n"
+            "audiomode:i:0\r\n"
+        )
+        data = content.encode("utf-16-le")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/x-rdp")
+        handler.send_header("Content-Length", str(len(data)))
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", host)[:40]
+        handler.send_header(
+            "Content-Disposition",
+            f'attachment; filename="{safe or "session"}.rdp"')
+        handler.end_headers()
+        try:
+            handler.wfile.write(data)
+        except BrokenPipeError:
+            pass
+
+    def svc_wol(self):
+        from .wol import WolController
+        if not hasattr(self, "_wol"):
+            self._wol = WolController(self.svc)
+        return self._wol
+
     # ----- служебное -----
 
     def _read_body(self):
@@ -960,7 +1002,7 @@ ROUTES_GET = {
     "events": "events_feed", "runbooks": "runbooks_list",
     "backupstatus": "backup_status_list",
     "planner": "planner_list", "softsearch": "software_search",
-    "gposcript": "gpo_script",
+    "gposcript": "gpo_script", "diskforecast": "disk_forecast_ep",
 }
 ROUTES_POST = {
     "settings": "settings_post",
@@ -976,6 +1018,7 @@ ROUTES_POST = {
     "runbookexec": "runbook_exec", "watchdogpoll": "watchdog_poll",
     "healthrecompute": "health_recompute", "backupcheck": "backup_check_now",
     "plannerdone": "planner_done", "invreport": "inv_report",
+    "wol": "wol_wake",
 }
 
 
@@ -1072,6 +1115,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stream":
             name = "stream"
             self.api.stream(qs, self)
+            return
+
+        if path == "/api/rdp":
+            self.api.rdp_download(qs, self)
             return
 
         if path.startswith("/api/"):

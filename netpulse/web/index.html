@@ -293,6 +293,15 @@
           <thead><tr><th>Машина</th><th>IP</th><th>ОС</th><th>Онлайн</th><th>Карма</th><th>Виден</th></tr></thead>
           <tbody></tbody></table>
       </div>
+      <div class="card">
+        <div class="card-title">Прогноз заполнения дисков
+          <button class="mini-btn right" onclick="UI.loadPark()"><svg class="ic sm"><use href="#i-refresh"/></svg></button>
+        </div>
+        <div id="disk-fc-status" class="result-box muted">Требуется история: 2+ замера за несколько дней</div>
+        <table class="tbl" id="diskfc-table">
+          <thead><tr><th>Машина</th><th>Диск</th><th>Свободно</th><th>Скорость падения</th><th>Хватит на</th></tr></thead>
+          <tbody></tbody></table>
+      </div>
       <div class="grid-2">
         <div class="card">
           <div class="card-title">События парка
