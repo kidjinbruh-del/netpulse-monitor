@@ -1642,8 +1642,26 @@ def run(config):
         backup_mgr.start()
 
     httpd = build_server(service, config, backup_mgr, host=host, port=port)
+
+    tls = config.get("web_tls") or {}
+    if tls.get("enabled"):
+        import ssl
+        cert, key = tls.get("cert") or "", tls.get("key") or ""
+        if cert and key and os.path.exists(cert) and os.path.exists(key):
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(cert, key)
+            httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+            scheme = "https"
+            print(f"[netpulse] HTTPS включён ({cert})")
+        else:
+            scheme = "http"
+            print("[netpulse] TLS: файлы сертификатов не найдены — "
+                  "работает HTTP. Сгенерируйте: tools\\make_cert.ps1")
+    else:
+        scheme = "http"
+
     if loopback:
-        url = f"http://127.0.0.1:{port}"
+        url = f"{scheme}://127.0.0.1:{port}"
     else:
         ips = []
         try:
@@ -1654,8 +1672,8 @@ def run(config):
                         ips.append(a.address)
         except Exception:
             pass
-        url = " | ".join(f"http://{ip}:{port}" for ip in ips) or \
-              f"http://{host}:{port}"
+        url = " | ".join(f"{scheme}://{ip}:{port}" for ip in ips) or \
+              f"{scheme}://{host}:{port}"
         print("[netpulse] доступ из локальной сети (нужен токен):", url)
         print("[netpulse] правило firewall (если попросит админ):")
         print(f'  netsh advfirewall firewall add rule name="NetPulse" '

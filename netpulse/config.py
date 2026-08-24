@@ -7,6 +7,8 @@ import copy
 import os
 import uuid
 
+from core.secrets import encrypt_config, decrypt_config
+
 CONFIG_FILE = "config.json"
 
 DEFAULTS = {
@@ -96,6 +98,11 @@ DEFAULTS = {
     "planner": {
         "enabled": False,
         "tasks": []
+    },
+    "web_tls": {
+        "enabled": False,
+        "cert": "netpulse/certs/cert.pem",
+        "key": "netpulse/certs/key.pem"
     }
 }
 
@@ -110,6 +117,8 @@ def load_config(path=CONFIG_FILE):
     except Exception as e:
         print(f"[config] ошибка загрузки: {e}")
 
+    cfg = decrypt_config(cfg)   # dpapi: -> plaintext (в памяти только)
+
     if cfg.get("web_auth_enabled") and not cfg.get("web_token"):
         cfg["web_token"] = uuid.uuid4().hex
         save_config(cfg, path)
@@ -118,8 +127,9 @@ def load_config(path=CONFIG_FILE):
 
 def save_config(cfg, path=CONFIG_FILE):
     try:
+        stored = encrypt_config(copy.deepcopy(cfg))   # секреты -> dpapi:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            json.dump(stored, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
         print(f"[config] ошибка сохранения: {e}")
