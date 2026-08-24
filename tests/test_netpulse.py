@@ -129,6 +129,19 @@ def test_backup_rotate():
 # ---------- живой HTTP ----------
 
 class MiniService:
+    class _MiniDB:
+        def execute(self, *a, **k):
+            return None
+    db = _MiniDB()
+
+    class _MiniJournal:
+        def list_entries(self, *a, **k):
+            return []
+        def month_report(self, *a, **k):
+            return {"entries": 0, "minutes": 0, "hours": 0, "by_source": [],
+                    "top_users": [], "top_hosts": [], "per_day": []}
+    journal = _MiniJournal()
+
     def __init__(self):
         self.snapshot = {
             "ts": time.time(), "down_kbps": 12.3, "up_kbps": 4.5,
@@ -186,7 +199,88 @@ def _get(url, headers=None):
         return e.code, e.read().decode("utf-8")
 
 
+def _post(url, body, headers=None, ctype="application/json"):
+    h = {"Content-Type": ctype}
+    h.update(headers or {})
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                 headers=h, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8")
+
+
+def test_post_csrf_guards():
+    """Мутации требуют честный JSON + заголовок X-Auth (анти-CSRF)."""
+    from netpulse.server import reset_auth_state
+    reset_auth_state()
+    httpd, port, cfg = _start_server(
+        {"web_auth_enabled": True, "web_token": "secret123"})
+    base = f"http://127.0.0.1:{port}"
+    try:
+        code, body = _post(base + "/api/alertsack", {},
+                           {"X-Auth": "secret123"}, ctype="text/plain")
+        assert code == 415, f"{code} {body[:120]}"
+        # без кредов вообще -> 401
+        code, body = _post(base + "/api/alertsack", {})
+        assert code == 401, f"{code} {body[:120]}"
+        # auth через cookie БЕЗ X-Auth -> это CSRF-сценарий -> 403
+        code, body = _post(base + "/api/alertsack", {},
+                           {"Cookie": "np_session=secret123"})
+        assert code == 403, f"{code} {body[:120]}"
+        # cookie + X-Auth -> ок
+        code, body = _post(base + "/api/alertsack", {},
+                           {"Cookie": "np_session=secret123",
+                            "X-Auth": "secret123"})
+        assert code == 200, f"{code} {body[:120]}"
+    finally:
+        httpd.shutdown()
+        reset_auth_state()
+
+
+def test_rate_limit_429():
+    """5 неверных токенов с одного IP -> блок 429."""
+    from netpulse.server import reset_auth_state
+    reset_auth_state()
+    httpd, port, cfg = _start_server(
+        {"web_auth_enabled": True, "web_token": "secret123"})
+    base = f"http://127.0.0.1:{port}"
+    try:
+        codes = []
+        for _ in range(6):
+            code, _ = _get(base + "/api/state", {"X-Auth": "wrong"})
+            codes.append(code)
+        assert codes[:5] == [401] * 5, codes
+        assert codes[5] == 429, codes
+    finally:
+        httpd.shutdown()
+        reset_auth_state()
+
+
+def test_whoami_identity():
+    """Сайт помнит, кто именно вошёл (по токену из web_admins)."""
+    from netpulse.server import reset_auth_state
+    reset_auth_state()
+    httpd, port, cfg = _start_server({
+        "web_auth_enabled": True, "web_token": "secret123",
+        "web_admins": [{"name": "Пётр", "token": "petr-token",
+                        "role": "admin"}]})
+    base = f"http://127.0.0.1:{port}"
+    try:
+        code, body = _get(base + "/api/whoami", {"X-Auth": "petr-token"})
+        assert code == 200
+        assert json.loads(body)["user"] == "Пётр", body
+        code, body = _get(base + "/api/whoami", {"X-Auth": "secret123"})
+        assert json.loads(body)["user"] == "admin"
+    finally:
+        httpd.shutdown()
+        reset_auth_state()
+
+
 def test_server_endpoints_and_auth():
+    from netpulse.server import reset_auth_state
+    reset_auth_state()
     httpd, port, cfg = _start_test_server_auth()
     base = f"http://127.0.0.1:{port}"
     try:
@@ -221,6 +315,8 @@ def _start_test_server_auth():
 
 
 def test_server_public_mode():
+    from netpulse.server import reset_auth_state
+    reset_auth_state()
     httpd, port, cfg = _start_server(None)
     base = f"http://127.0.0.1:{port}"
     try:
@@ -264,7 +360,9 @@ if __name__ == "__main__":
             print(f"  PASS {fn.__name__}")
             ok += 1
         except Exception as e:
-            print(f"  FAIL {fn.__name__}: {e}")
+            import traceback
+            tb = traceback.format_exc().strip().splitlines()[-1]
+            print(f"  FAIL {fn.__name__}: {e} | {tb}")
         os.chdir(cwd)
     print(f"{ok}/{len(ALL)} тестов прошло")
     sys.exit(0 if ok == len(ALL) else 1)

@@ -14,6 +14,7 @@ DEFAULTS = {
     "web_host": "127.0.0.1",
     "web_auth_enabled": False,
     "web_token": "",
+    "web_admins": [],
     "theme": "dark",
     "ping_interval_sec": 1,
     "db_cleanup_days": 30,

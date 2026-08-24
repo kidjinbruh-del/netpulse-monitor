@@ -218,6 +218,7 @@ const UI = {
     $("show-listening").addEventListener("change", () => this.refreshConns());
     this.switchView(this.hashView() || "dashboard");
     this.loadDashPlatform();
+    this.loadWhoami();
     setInterval(() => this.loadDashPlatform(), 60000);
     window.addEventListener("hashchange", () => {
       const v = this.hashView();
@@ -314,13 +315,20 @@ const UI = {
     const t = $("login-token").value.trim();
     Auth.set(t);
     try {
-      await apiGet("state");
+      await apiPost("login", { token: t });   // сервер ставит вечную cookie
       $("login-overlay").classList.add("hidden");
       $("login-error").textContent = "";
       location.reload();
     } catch (e) {
       $("login-error").textContent = "Неверный токен";
     }
+  },
+  async loadWhoami() {
+    try {
+      const u = await apiGet("whoami");
+      $("whoami").textContent = "👤 " + (u.user || "?") +
+        (u.auth_enabled ? "" : " · локальный режим");
+    } catch (e) { void e; }
   },
 
   /* ---------- рендер состояния ---------- */

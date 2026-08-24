@@ -46,6 +46,41 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 # Ключи конфига, которые нельзя менять через API (только правкой config.json)
 PROTECTED_SETTINGS = {"web_auth_enabled"}
 
+# ---------- защита от брутфорса токена ----------
+AUTH_FAILS = {}   # ip -> [count, window_start]
+AUTH_BLOCK = {}   # ip -> blocked_until
+AUTH_MAX_FAILS = 5
+AUTH_BLOCK_SEC = 600
+
+
+def _auth_fail(ip):
+    now = time.time()
+    cnt, t0 = AUTH_FAILS.get(ip, [0, now])
+    if now - t0 > AUTH_BLOCK_SEC:
+        cnt, t0 = 0, now
+    cnt += 1
+    AUTH_FAILS[ip] = [cnt, t0]
+    if cnt >= AUTH_MAX_FAILS:
+        AUTH_BLOCK[ip] = now + AUTH_BLOCK_SEC
+        AUTH_FAILS.pop(ip, None)
+        return True
+    return False
+
+
+def _auth_blocked(ip):
+    until = AUTH_BLOCK.get(ip)
+    if until and time.time() < until:
+        return int(until - time.time())
+    if until:
+        AUTH_BLOCK.pop(ip, None)
+    return 0
+
+
+def reset_auth_state():
+    """Для тестов: очистить счётчики неудач и блокировки."""
+    AUTH_FAILS.clear()
+    AUTH_BLOCK.clear()
+
 
 def platform_report_text(svc, days=30):
     """Текстовый отчёт отдела для начальства (журнал + парк + бэкапы)."""
@@ -928,9 +963,9 @@ class Api:
     def planner_done(self, q):
         body = self._read_body()
         name = str(body.get("name") or "").strip()
-        return self.svc.planner.mark_done(name,
-                                          actor=str(body.get("actor")
-                                                    or "admin"))
+        actor = (getattr(self.api, "_cached_actor", None)
+                 or str(body.get("actor") or "admin"))
+        return self.svc.planner.mark_done(name, actor=actor)
 
     def events_feed(self, q):
         limit = min(int(q.get("limit", ["80"])[0] or 80), 300)
@@ -965,7 +1000,8 @@ class Api:
         rb = str(body.get("name") or "").strip()
         params = body.get("params") if isinstance(body.get("params"), dict) \
             else {}
-        actor = str(body.get("actor") or "admin")
+        actor = (getattr(self.api, "_cached_actor", None)
+                 or str(body.get("actor") or "admin"))
         res = self.svc.runbooks.execute(rb, params, actor)
         code = 200 if res.get("ok") else 400
         return (code, res)
@@ -1028,6 +1064,11 @@ class Api:
         return self._wol
 
     # ----- самодиагностика и карта для ИИ -----
+
+    def whoami(self, q):
+        user = getattr(self, "_cached_actor", None) or "admin"
+        return {"user": user,
+                "auth_enabled": bool(self.cfg.get("web_auth_enabled"))}
 
     def selftest(self, q):
         checks = []
@@ -1134,7 +1175,7 @@ ROUTES_GET = {
     "backupstatus": "backup_status_list",
     "planner": "planner_list", "softsearch": "software_search",
     "gposcript": "gpo_script", "diskforecast": "disk_forecast_ep",
-    "selftest": "selftest", "meta": "meta",
+    "selftest": "selftest", "meta": "meta", "whoami": "whoami",
 }
 ROUTES_POST = {
     "settings": "settings_post",
@@ -1164,25 +1205,51 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- auth ----------
 
-    def _authed(self, qs=None):
-        if not self.api.cfg.get("web_auth_enabled"):
-            return True
-        token = self.api.cfg.get("web_token", "")
-        if not token:
-            return True
-        header = self.headers.get("X-Auth", "")
-        if hmac.compare_digest(header.encode("utf-8"), token.encode("utf-8")):
-            return True
-        cookie = self.headers.get("Cookie", "")
-        m = re.search(r"(?:^|;\s*)np_token=([^\s;]+)", cookie)
-        if m and hmac.compare_digest(m.group(1).encode("utf-8"), token.encode("utf-8")):
-            return True
+    def _identity(self, qs=None):
+        """Имя вошедшего админа или None. Токены бессрочные."""
+        cfg = self.api.cfg
+        if not cfg.get("web_auth_enabled"):
+            return "admin"          # локальный режим без auth
+        candidates = []
+        admins = cfg.get("web_admins") or []
+        if isinstance(admins, list):
+            for a in admins:
+                if isinstance(a, dict) and a.get("token"):
+                    candidates.append((str(a.get("name") or "?"),
+                                       str(a["token"])))
+        if cfg.get("web_token"):
+            candidates.append(("admin", str(cfg["web_token"])))
+        if not candidates:
+            return "admin"          # auth включён, но токен пуст -> открытый режим
+        supplied = [self.headers.get("X-Auth", "")]
+        cookie = self.headers.get("Cookie", "") or ""
+        for cname in ("np_session", "np_token"):
+            m = re.search(rf"(?:^|;\s*){cname}=([^\s;]+)", cookie)
+            if m:
+                supplied.append(m.group(1))
         if qs:
-            qtoken = qs.get("token", [""])[0]
-            if qtoken and hmac.compare_digest(qtoken.encode("utf-8"),
-                                              token.encode("utf-8")):
-                return True
-        return False
+            supplied.append(qs.get("token", [""])[0])
+        for name, tok in candidates:
+            for s in supplied:
+                if s and hmac.compare_digest(s.encode("utf-8"),
+                                             tok.encode("utf-8")):
+                    return name
+        return None
+
+    def _authed(self, qs=None):
+        ident = self._identity(qs)
+        self._user = ident
+        return ident is not None
+
+    def _sec(self):
+        """Заголовки безопасности на каждый ответ."""
+        for k, v in (("X-Frame-Options", "DENY"),
+                     ("X-Content-Type-Options", "nosniff"),
+                     ("Referrer-Policy", "no-referrer"),
+                     ("Content-Security-Policy",
+                      "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                      "style-src 'self' 'unsafe-inline'; img-src 'self' data:")):
+            self.send_header(k, v)
 
     # ---------- ответы ----------
 
@@ -1192,6 +1259,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        self._sec()
         self.end_headers()
         self.wfile.write(payload)
 
@@ -1209,6 +1277,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         if ext in (".js", ".css", ".html"):
             self.send_header("Cache-Control", "no-cache")
+        self._sec()
         if download_name:
             self.send_header("Content-Disposition",
                              f'attachment; filename="{download_name}"')
@@ -1233,11 +1302,28 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
         qs = parse_qs(parsed.query)
 
+        ip = self.client_address[0]
+        wait = _auth_blocked(ip)
+        if wait:
+            self._send_json(
+                {"error": f"слишком много неудачных попыток, подождите {wait} c"},
+                429)
+            return
         if (path.startswith("/api/") or path == "/metrics"
                 or path in ("/journal.txt", "/journal.csv", "/report.txt")):
             if not self._authed(qs):
+                just_blocked = _auth_fail(ip)
+                try:
+                    self.api.svc.push_alert(
+                        "AUTH_FAIL",
+                        f"Неудачная авторизация с {ip}" +
+                        (" — IP заблокирован на 10 мин" if just_blocked else ""),
+                        "security", rate=60)
+                except Exception:
+                    pass
                 self._send_json({"error": "unauthorized"}, 401)
                 return
+            self.api._cached_actor = getattr(self, "_user", None) or "admin"
 
         if path == "/":
             self._static("index.html")
@@ -1428,9 +1514,38 @@ class Handler(BaseHTTPRequestHandler):
         if not path.startswith("/api/"):
             self._send_json({"error": "unknown endpoint"}, 404)
             return
-        if not self._authed(qs):
-            self._send_json({"error": "unauthorized"}, 401)
+
+        ip = self.client_address[0]
+        wait = _auth_blocked(ip)
+        if wait:
+            self._send_json(
+                {"error": f"слишком много неудачных попыток, подождите {wait} c"},
+                429)
             return
+
+        is_login = path == "/api/login"
+        if not is_login:
+            if not self._authed(qs):
+                just_blocked = _auth_fail(ip)
+                try:
+                    self.api.svc.push_alert(
+                        "AUTH_FAIL",
+                        f"Неудачная авторизация (POST {path}) с {ip}" +
+                        (" — IP заблокирован" if just_blocked else ""),
+                        "security", rate=60)
+                except Exception:
+                    pass
+                self._send_json({"error": "unauthorized"}, 401)
+                return
+            # анти-CSRF: мутации только честным JSON + кастомный заголовок
+            ctype = (self.headers.get("Content-Type") or "").lower()
+            if "application/json" not in ctype:
+                self._send_json(
+                    {"error": "нужен Content-Type: application/json"}, 415)
+                return
+            if not self.headers.get("X-Auth"):
+                self._send_json({"error": "нужен заголовок X-Auth"}, 403)
+                return
 
         name = path[len("/api/"):]
         length = int(self.headers.get("Content-Length") or 0)
@@ -1442,12 +1557,44 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 body = {}
 
+        if is_login:
+            # вход: бессрочная сессия админа (cookie на 10 лет)
+            token = str(body.get("token") or "").strip()
+            cfg = self.api.cfg
+            candidates = []
+            for a in (cfg.get("web_admins") or []):
+                if isinstance(a, dict) and a.get("token"):
+                    candidates.append((str(a.get("name") or "?"),
+                                       str(a["token"])))
+            if cfg.get("web_token"):
+                candidates.append(("admin", str(cfg["web_token"])))
+            for nm, tok in candidates:
+                if token and hmac.compare_digest(token.encode("utf-8"),
+                                                 tok.encode("utf-8")):
+                    self.send_response(200)
+                    self.send_header("Content-Type",
+                                     "application/json; charset=utf-8")
+                    self.send_header(
+                        "Set-Cookie",
+                        f"np_session={token}; HttpOnly; SameSite=Strict; "
+                        f"Max-Age=315360000; Path=/")
+                    self._sec()
+                    payload = json.dumps({"ok": True, "user": nm},
+                                         ensure_ascii=False).encode("utf-8")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
+            self._send_json({"ok": False, "error": "неверный токен"}, 401)
+            return
+
         handler_name = ROUTES_POST.get(name)
         if not handler_name:
             self._send_json({"error": "unknown endpoint"}, 404)
             return
 
         self.api._cached_body = body
+        self.api._cached_actor = self._identity(qs) or "admin"
         try:
             result = getattr(self.api, handler_name)(qs)
             if isinstance(result, tuple):
