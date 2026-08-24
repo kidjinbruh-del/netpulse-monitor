@@ -14,7 +14,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 from datetime import datetime
 
 from core.utils import decode_process_output

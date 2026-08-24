@@ -258,6 +258,7 @@ const UI = {
     $("sidebar").classList.remove("open");
 
     if (view === "traffic") { this.refreshInterfaces(); this.refreshConns(); }
+    if (view === "lan") this.lanDevices();
     if (view === "apps") { this.loadApps(); this.loadNewConns(); }
     if (view === "security") { this.loadIds(); this.fwList(); }
     if (view === "ai") this.loadAI();

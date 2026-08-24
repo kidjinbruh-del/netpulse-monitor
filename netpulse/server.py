@@ -16,7 +16,7 @@ import sys
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from datetime import datetime, timedelta
+from datetime import datetime
 from urllib.request import urlopen, Request
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -1006,6 +1006,84 @@ class Api:
             self._wol = WolController(self.svc)
         return self._wol
 
+    # ----- самодиагностика и карта для ИИ -----
+
+    def selftest(self, q):
+        checks = []
+
+        def add(name, ok, info=""):
+            checks.append({"name": name, "ok": bool(ok), "info": str(info)[:140]})
+
+        try:
+            tables = {r["name"] for r in (self.svc.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'",
+                fetch=True) or [])}
+            need = {"hosts", "events", "journal", "runbook_log",
+                    "backup_status", "planner_state", "sw_inventory",
+                    "traffic", "pings", "alerts", "lan_devices",
+                    "karma_history", "disk_history"}
+            missing = need - tables
+            add("БД: таблицы", not missing,
+                f"нет: {','.join(sorted(missing))}" if missing
+                else f"{len(tables)} таблиц")
+        except Exception as e:
+            add("БД", False, e)
+
+        for name in ("journal", "inventory", "watchdog", "runbooks",
+                     "backupwatch", "planner", "softwareinv"):
+            try:
+                getattr(self.svc, name)
+                add(f"модуль {name}", True)
+            except Exception as e:
+                add(f"модуль {name}", False, e)
+
+        try:
+            import shutil
+            free = shutil.disk_usage(os.getcwd()).free
+            add("диск", free > 1e9, f"{free / 1e9:.1f} GB свободно")
+        except Exception as e:
+            add("диск", False, e)
+
+        try:
+            st = self.svc.watchdog.status()
+            add("watchdog", True,
+                f"enabled={st['enabled']}, running={st['running']}")
+        except Exception as e:
+            add("watchdog", False, e)
+
+        ok_all = all(c["ok"] for c in checks)
+        return {"ok": ok_all, "version": __version__, "checks": checks}
+
+    def meta(self, q):
+        try:
+            cfg = json.loads(json.dumps(self.cfg))
+            if cfg.get("web_token"):
+                cfg["web_token"] = "***"
+            if isinstance(cfg.get("telegram"), dict) and cfg["telegram"].get("token"):
+                cfg["telegram"]["token"] = "***"
+        except Exception:
+            cfg = {}
+        tables = [r["name"] for r in (self.svc.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+            fetch=True) or [])]
+        modules = {}
+        for name in ("journal", "inventory", "watchdog", "runbooks",
+                     "backupwatch", "planner", "softwareinv", "wol"):
+            mod = sys.modules.get(f"netpulse.{name}")
+            if mod:
+                modules[name] = (mod.__doc__ or "").strip().split("\n")[0]
+        return {
+            "app": f"NetPulse {__version__}",
+            "endpoints_get": sorted(ROUTES_GET.keys()),
+            "endpoints_post": sorted(ROUTES_POST.keys()),
+            "special_paths": ["/api/stream", "/api/rdp", "/api/gposcript",
+                              "/journal.txt", "/journal.csv", "/report.txt",
+                              "/metrics"],
+            "db_tables": tables,
+            "config": cfg,
+            "modules": modules,
+        }
+
     # ----- служебное -----
 
     def _read_body(self):
@@ -1035,6 +1113,7 @@ ROUTES_GET = {
     "backupstatus": "backup_status_list",
     "planner": "planner_list", "softsearch": "software_search",
     "gposcript": "gpo_script", "diskforecast": "disk_forecast_ep",
+    "selftest": "selftest", "meta": "meta",
 }
 ROUTES_POST = {
     "settings": "settings_post",
