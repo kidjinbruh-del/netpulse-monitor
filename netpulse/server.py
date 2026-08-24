@@ -801,22 +801,36 @@ class Api:
 
     def report_data(self, q):
         snap = self.svc.get_snapshot()
-        agg = self.svc.db.execute(
-            """SELECT COUNT(*) AS samples, AVG(speed) AS avg_kbps, MAX(speed) AS max_kbps
-               FROM traffic WHERE timestamp > datetime('now','localtime','-24 hours')""",
-            fetch=True)
-        ping = self.svc.db.execute(
-            """SELECT AVG(ping_ms) AS avg_ping, AVG(loss)*100 AS loss
-               FROM pings WHERE timestamp > datetime('now','localtime','-24 hours')""",
-            fetch=True)
+        try:
+            agg = self.svc.db.execute(
+                """SELECT COUNT(*) AS samples, AVG(speed) AS avg_kbps, MAX(speed) AS max_kbps
+                   FROM traffic WHERE timestamp > datetime('now','localtime','-24 hours')""",
+                fetch=True) or [{}]
+        except Exception:
+            agg = [{}]
+        try:
+            ping = self.svc.db.execute(
+                """SELECT AVG(ping_ms) AS avg_ping, AVG(loss)*100 AS loss
+                   FROM pings WHERE timestamp > datetime('now','localtime','-24 hours')""",
+                fetch=True) or [{}]
+        except Exception:
+            ping = [{}]
+        try:
+            quota = self.svc.quota.usage()
+        except Exception:
+            quota = {}
+        try:
+            recent = list(self.svc.live_alerts)
+        except Exception:
+            recent = []
         return {
             "generated": datetime.now().isoformat(),
-            "app": f"NetPulse v{__version__}",
+            "app": f"NetPulse {__version__}",
             "live": snap,
-            "quota": self.svc.quota.usage(),
+            "quota": quota,
             "day_stats": (agg[0] if agg else {}),
             "ping_stats": (ping[0] if ping else {}),
-            "recent_alerts": list(self.svc.live_alerts),
+            "recent_alerts": recent,
         }
 
     # ----- платформа отдела: журнал / парк / кнопки -----
