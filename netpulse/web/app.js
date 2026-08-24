@@ -1132,12 +1132,13 @@ const UI = {
       const el = $("park-detail");
       const score = d.health_score ?? 100;
       const color = score >= 80 ? "#22d3a7" : score >= 50 ? "#f5b942" : "#ff5c74";
+      const isSelf = !d.ip || ["127.0.0.1", "localhost"].includes(String(d.ip).toLowerCase());
       let html =
         `<div style="display:flex;justify-content:space-between;align-items:center">
            <b>${esc(d.name)}</b>
            <span>
              <a class="btn ghost" href="/api/rdp?host=${encodeURIComponent(d.ip || d.name)}${Auth.suffix()}">RDP</a>
-             <button class="btn ghost" onclick="UI.wakeCur()">WoL</button>
+             ${isSelf ? "" : `<button class="btn ghost" onclick="UI.wakeCur()">WoL</button>`}
              <button class="btn ghost" onclick="UI.pingCur()">Ping</button>
              <button class="mini-btn" onclick="document.getElementById('park-detail').classList.add('hidden')">✕</button>
            </span>
