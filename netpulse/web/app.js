@@ -217,6 +217,8 @@ const UI = {
 
     $("show-listening").addEventListener("change", () => this.refreshConns());
     this.switchView(this.hashView() || "dashboard");
+    this.loadDashPlatform();
+    setInterval(() => this.loadDashPlatform(), 60000);
     window.addEventListener("hashchange", () => {
       const v = this.hashView();
       if (v && v !== this.currentView) this.switchView(v);
@@ -961,6 +963,7 @@ const UI = {
           <td><button class="mini-btn" title="удалить" onclick="UI.journalDel(${e.id})">✕</button></td>
         </tr>`).join("") : `<tr><td colspan="6" class="muted">Пока пусто — добавьте первую запись</td></tr>`;
       this.loadJournalReport();
+      this.loadPlanner();
     } catch (e) { toast(String(e), true); }
   },
   async journalAdd() {
@@ -1014,7 +1017,7 @@ const UI = {
         ? h.hosts.map(m => {
             const score = m.health_score ?? 100;
             const color = score >= 80 ? "#22d3a7" : score >= 50 ? "#f5b942" : "#ff5c74";
-            return `<tr>
+            return `<tr style="cursor:pointer" onclick="UI.showHost(${m.id})">
               <td>${esc(m.name)}</td>
               <td class="mono">${esc(m.ip || "")}</td>
               <td class="muted">${esc((m.os || "").slice(0, 28))}</td>
@@ -1079,6 +1082,118 @@ const UI = {
       out.textContent = `[${r.ok ? "OK" : "FAIL"} код ${r.exit_code}, ${r.seconds}s]\n${r.output || "(без вывода)"}`;
       this.loadPark();
     } catch (e) { toast(String(e), true); }
+  },
+
+  /* ---------- карточка машины ---------- */
+  async showHost(id) {
+    try {
+      const d = await apiGet(`hostdetail?id=${id}`);
+      if (d.error) { toast(d.error, true); return; }
+      const el = $("park-detail");
+      const score = d.health_score ?? 100;
+      const color = score >= 80 ? "#22d3a7" : score >= 50 ? "#f5b942" : "#ff5c74";
+      let html =
+        `<div style="display:flex;justify-content:space-between;align-items:center">
+           <b>${esc(d.name)}</b>
+           <button class="mini-btn" onclick="document.getElementById('park-detail').classList.add('hidden')">✕</button>
+         </div>
+         <div class="muted">${esc(d.os || "")} · ${esc(d.ip || "ip?")} ·
+           ${d.online ? "в сети" : "офлайн"} · карма <span style="color:${color}"><b>${score}</b></span></div>` +
+        (d.cpu ? `<div class="muted">CPU: ${esc(d.cpu)}${d.ram_gb ? " · RAM: " + esc(d.ram_gb) + " GB" : ""}</div>` : "");
+      if (d.software?.length)
+        html += `<div class="muted" style="margin-top:4px">Установлено ПО: ${d.software.length} позиций (поиск — ниже)</div>`;
+      if (d.events.length) {
+        html += `<div class="muted" style="margin-top:6px">События:</div>` +
+          d.events.slice(0, 5).map(e =>
+            `<div>[${esc(String(e.timestamp).slice(5, 16).replace("T", " "))}] ${esc(e.severity)} ${esc(e.kind)}: ${esc(e.text)}</div>`).join("");
+      }
+      if (d.journal.length) {
+        html += `<div class="muted" style="margin-top:6px">Работы:</div>` +
+          d.journal.slice(0, 5).map(j =>
+            `<div>[${esc(String(j.timestamp).slice(5, 16).replace("T", " "))}] ${esc(j.text)}${j.minutes ? ` (${j.minutes} мин)` : ""}</div>`).join("");
+      }
+      el.innerHTML = html || "нет данных";
+      el.classList.remove("hidden");
+    } catch (e) { toast(String(e), true); }
+  },
+
+  /* ---------- плановые работы ---------- */
+  _plannerTasks: [],
+  async loadPlanner() {
+    try {
+      const d = await apiGet("planner");
+      this._plannerTasks = d.tasks || [];
+      $("planner-status").textContent = d.enabled
+        ? `Задач в плане: ${this._plannerTasks.length}`
+        : `Планировщик выключен. Включите в config.json: "planner": {"enabled": true, "tasks": [{"name": "...", "every_days": 30}]}`;
+      $("planner-table").querySelector("tbody").innerHTML =
+        this._plannerTasks.length ? this._plannerTasks.map((t, i) => {
+          const st = t.due
+            ? `<span class="chip CRITICAL">просрочено</span>`
+            : `<span class="chip INFO">ок</span>`;
+          const left = t.days_left === null ? "" :
+            t.days_left < 0 ? "ни разу" : `осталось ${t.days_left} дн`;
+          return `<tr>
+            <td>${esc(t.name)}</td>
+            <td class="mono">${t.every_days} дн</td>
+            <td>${st}<span class="muted"> ${left}</span></td>
+            <td class="mono muted">${esc(t.last_done ? String(t.last_done).slice(0, 16).replace("T", " ") : "—")}</td>
+            <td><button class="btn ghost" onclick="UI.plannerDone(${i})">Выполнено</button></td>
+          </tr>`;
+        }).join("") : `<tr><td colspan="5" class="muted">Задач нет</td></tr>`;
+    } catch (e) { void e; }
+  },
+  async plannerDone(idx) {
+    const t = this._plannerTasks[idx];
+    if (!t) return;
+    try {
+      await apiPost("plannerdone", { name: t.name });
+      toast(`Отмечено: ${t.name}`);
+      this.loadPlanner();
+    } catch (e) { toast(String(e), true); }
+  },
+  downloadReport() {
+    location.href = "/journal.txt?days=30" + Auth.suffix();
+  },
+
+  /* ---------- софт парка ---------- */
+  async softSearch() {
+    try {
+      const q = $("sw-q").value.trim();
+      const d = await apiGet("softsearch?q=" + encodeURIComponent(q));
+      $("sw-stats").textContent = q
+        ? `Найдено: ${d.results.length}`
+        : `Машин с отчётами: ${d.stats.hosts ?? 0} · позиций ПО: ${d.stats.packages ?? 0}`;
+      $("sw-table").querySelector("tbody").innerHTML = d.results.length
+        ? d.results.map(s => `<tr>
+            <td>${esc(s.name)}</td>
+            <td class="mono muted">${esc(s.version || "")}</td>
+            <td class="muted">${esc(s.publisher || "")}</td>
+            <td>${esc(s.host)}</td>
+            <td class="mono">${esc(s.ip || "")}</td>
+          </tr>`).join("")
+        : `<tr><td colspan="5" class="muted">Ничего не найдено${q ? "" : " — отчёты ещё не приходили"}</td></tr>`;
+    } catch (e) { toast(String(e), true); }
+  },
+
+  /* ---------- виджет дашборда ---------- */
+  async loadDashPlatform() {
+    try {
+      const [h, r] = await Promise.all([
+        apiGet("hosts"), apiGet("journalreport?days=1")]);
+      const worst = h.hosts.filter(x => x.health_score < 80)
+        .sort((a, b) => a.health_score - b.health_score).slice(0, 3);
+      let html = "";
+      if (worst.length)
+        html += worst.map(m => {
+          const c = m.health_score >= 50 ? "#f5b942" : "#ff5c74";
+          return `${esc(m.name)}: <span style="color:${c};font-weight:600">${m.health_score}</span>`;
+        }).join("<br>");
+      else
+        html += `<span class="muted">парк здоров</span>`;
+      html += `<br>Журнал за сутки: <b>${r.entries ?? 0}</b> (${r.minutes ?? 0} мин)`;
+      $("dash-platform").innerHTML = html;
+    } catch (e) { void e; }
   },
 
 

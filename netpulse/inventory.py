@@ -19,6 +19,14 @@ def _now_iso():
 class Inventory:
     def __init__(self, service):
         self.svc = service
+        # миграция старых баз: железо в карточке машины
+        cols = [r["name"] for r in (self.svc.db.execute(
+            "PRAGMA table_info(hosts)", fetch=True) or [])]
+        if cols:
+            if "cpu" not in cols:
+                self.svc.db.execute("ALTER TABLE hosts ADD COLUMN cpu TEXT")
+            if "ram_gb" not in cols:
+                self.svc.db.execute("ALTER TABLE hosts ADD COLUMN ram_gb REAL")
 
     # ---------- машины ----------
 

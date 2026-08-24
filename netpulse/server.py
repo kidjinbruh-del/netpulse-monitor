@@ -47,6 +47,66 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 PROTECTED_SETTINGS = {"web_auth_enabled"}
 
 
+def platform_report_text(svc, days=30):
+    """Текстовый отчёт отдела для начальства (журнал + парк + бэкапы)."""
+    rep = svc.journal.month_report(days)
+    lines = [
+        "=" * 56,
+        f"ОТЧЁТ ОТДЕЛА ИТ  ({datetime.now():%Y-%m-%d %H:%M}, период {days} дн)",
+        "=" * 56,
+        "",
+        f"Записей в журнале : {rep['entries']}",
+        f"Затрачено времени : {rep['minutes']} мин (~{rep['hours']} ч)",
+        "",
+        "По источникам:",
+    ]
+    for s in rep["by_source"]:
+        lines.append(f"  {s['source']:<10} {s['n']:>4} шт   {s['minutes']:>5} мин")
+    if rep["top_users"]:
+        lines += ["", "Больше всего времени:"]
+        for u in rep["top_users"]:
+            lines.append(f"  {u['who']:<20} {u['n']:>3} шт {u['minutes']:>5} мин")
+    if rep["top_hosts"]:
+        lines += ["", "Топ машин по обращениям:"]
+        for h in rep["top_hosts"]:
+            lines.append(f"  {h['host']:<20} {h['n']:>3} шт {h['minutes']:>5} мин")
+
+    worst = svc.inventory.worst_hosts(5) if hasattr(svc, "inventory") else []
+    if worst:
+        lines += ["", "Карма парка (худшие):"]
+        for w in worst:
+            lines.append(f"  {w['name']:<20} карма {w['health_score']}, "
+                         f"{'в сети' if w['online'] else 'НЕ В СЕТИ'}")
+
+    try:
+        evs = svc.db.execute(
+            """SELECT timestamp, severity, COALESCE(h.name,''), text
+               FROM events e LEFT JOIN hosts h ON h.id = e.host_id
+               WHERE severity IN ('CRITICAL','HIGH')
+                 AND timestamp > datetime('now','localtime', ? || ' days')
+               ORDER BY e.id DESC LIMIT 15""", (f"-{days}",), fetch=True) or []
+        if evs:
+            lines += ["", f"Критичные события за {days} дн:"]
+            for e in evs:
+                lines.append(f"  [{e['timestamp'][:16]}] "
+                             f"{e['severity']:<8} {e[2]}: {e['text'][:70]}")
+    except Exception:
+        pass
+
+    try:
+        planner = svc.planner.status_list()
+        due = [p for p in planner if p["due"]]
+        if due:
+            lines += ["", "Просроченные плановые работы:"]
+            for p in due:
+                lines.append(f"  {p['name']} (каждые {p['every_days']} дн)")
+    except Exception:
+        pass
+
+    lines += ["", "Сформировано NetPulse", ""]
+    return "\n".join(lines)
+
+
 def submit_job(fn):
     job_id = uuid.uuid4().hex[:12]
     JOBS[job_id] = {"status": "running", "result": None, "error": None,
@@ -781,7 +841,42 @@ class Api:
         except ValueError:
             return (400, {"error": "нужен числовой id"})
         d = self.svc.inventory.host_detail(hid)
-        return (404, d) if d.get("error") else d
+        if d.get("error"):
+            return (404, d)
+        d["software"] = self.svc.softwareinv.for_host(hid, 200)
+        return d
+
+    def software_search(self, q):
+        term = q.get("q", [""])[0]
+        return {"results": self.svc.softwareinv.search(term),
+                "stats": self.svc.softwareinv.stats()}
+
+    def inv_report(self, q):
+        body = self._read_body()
+        try:
+            return self.svc.softwareinv.receive_report(body)
+        except Exception as e:
+            return (500, {"ok": False, "error": str(e)})
+
+    def gpo_script(self, q):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "gpo", "inventory.ps1")
+        if not os.path.isfile(path):
+            return (404, {"error": "скрипт не найден"})
+        self._send_file(path, download_name="netpulse-inventory.ps1")
+
+    # ----- плановые работы -----
+
+    def planner_list(self, q):
+        return {"tasks": self.svc.planner.status_list(),
+                "enabled": bool(self.cfg.get("planner", {}).get("enabled"))}
+
+    def planner_done(self, q):
+        body = self._read_body()
+        name = str(body.get("name") or "").strip()
+        return self.svc.planner.mark_done(name,
+                                          actor=str(body.get("actor")
+                                                    or "admin"))
 
     def events_feed(self, q):
         limit = min(int(q.get("limit", ["80"])[0] or 80), 300)
@@ -864,6 +959,8 @@ ROUTES_GET = {
     "hosts": "hosts_list", "hostdetail": "host_detail_ep",
     "events": "events_feed", "runbooks": "runbooks_list",
     "backupstatus": "backup_status_list",
+    "planner": "planner_list", "softsearch": "software_search",
+    "gposcript": "gpo_script",
 }
 ROUTES_POST = {
     "settings": "settings_post",
@@ -878,6 +975,7 @@ ROUTES_POST = {
     "journaladd": "journal_add", "journaldel": "journal_delete",
     "runbookexec": "runbook_exec", "watchdogpoll": "watchdog_poll",
     "healthrecompute": "health_recompute", "backupcheck": "backup_check_now",
+    "plannerdone": "planner_done", "invreport": "inv_report",
 }
 
 
@@ -990,6 +1088,27 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(result)
             except BrokenPipeError:
                 pass
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
+        if path == "/journal.txt":
+            try:
+                days = min(max(int(qs.get("days", ["30"])[0] or 30), 1), 365)
+            except ValueError:
+                days = 30
+            try:
+                body = platform_report_text(self.api.svc, days)
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 "text/plain; charset=utf-8")
+                self.send_header("Content-Length",
+                                 str(len(body.encode("utf-8"))))
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="netpulse_otchet_{days}d.txt"')
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
             return

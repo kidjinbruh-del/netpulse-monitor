@@ -132,6 +132,8 @@
           <div id="dash-forecast" class="kv muted">собираем данные…</div>
           <div class="card-title mt18">Квота трафика</div>
           <div id="dash-quota" class="quota-box muted">лимиты не заданы</div>
+          <div class="card-title mt18">Парк и журнал</div>
+          <div id="dash-platform" class="kv muted">—</div>
         </div>
       </div>
     </section>
@@ -151,6 +153,7 @@
         </div>
         <div class="card">
           <div class="card-title">Отчёт за 30 дней
+            <button class="btn ghost right" onclick="UI.downloadReport()">Скачать</button>
             <button class="btn ghost right" onclick="UI.loadJournalReport()"><svg class="ic sm"><use href="#i-refresh"/></svg>Обновить</button>
           </div>
           <div id="jr-report" class="result-box muted">—</div>
@@ -162,6 +165,15 @@
         </div>
         <table class="tbl" id="journal-table">
           <thead><tr><th>Время</th><th>Источник</th><th>Кто/где</th><th>Запись</th><th>Мин</th><th></th></tr></thead>
+          <tbody></tbody></table>
+      </div>
+      <div class="card">
+        <div class="card-title">Плановые работы
+          <span class="hint">список задаётся в config.json -> "planner"</span>
+        </div>
+        <div id="planner-status" class="result-box muted">—</div>
+        <table class="tbl" id="planner-table">
+          <thead><tr><th>Задача</th><th>Период</th><th>Статус</th><th>Последний раз</th><th></th></tr></thead>
           <tbody></tbody></table>
       </div>
     </section>
@@ -276,6 +288,7 @@
           </span>
         </div>
         <div id="park-status" class="result-box muted">Сторож опрашивает машины из списка watchdog.hosts (WinRM/WMI через PowerShell). Включается в config.json: "watchdog": {"enabled": true}</div>
+        <div id="park-detail" class="result-box mono hidden"></div>
         <table class="tbl" id="park-table">
           <thead><tr><th>Машина</th><th>IP</th><th>ОС</th><th>Онлайн</th><th>Карма</th><th>Виден</th></tr></thead>
           <tbody></tbody></table>
@@ -294,6 +307,19 @@
           <div id="rb-list" class="result-box muted">—</div>
           <div id="rb-output" class="result-box mono hidden"></div>
         </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Софт в парке
+          <span class="hint">отчёты с машин: GPO-скрипт /api/gposcript</span>
+          <span class="right">
+            <input class="inp" id="sw-q" placeholder="1С, Chrome..." style="width:170px" onkeydown="if(event.key==='Enter')UI.softSearch()">
+            <button class="btn ghost" onclick="UI.softSearch()">Найти</button>
+          </span>
+        </div>
+        <div id="sw-stats" class="muted"></div>
+        <table class="tbl" id="sw-table">
+          <thead><tr><th>ПО</th><th>Версия</th><th>Издатель</th><th>Машина</th><th>IP</th></tr></thead>
+          <tbody></tbody></table>
       </div>
     </section>
 

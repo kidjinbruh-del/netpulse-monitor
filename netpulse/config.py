@@ -90,6 +90,10 @@ DEFAULTS = {
         "enabled": False,
         "drill_reminder": True,
         "resources": []
+    },
+    "planner": {
+        "enabled": False,
+        "tasks": []
     }
 }
 

@@ -32,6 +32,8 @@ from .inventory import Inventory
 from .watchdog import ParkWatchdog
 from .runbooks import RunbookRunner
 from .backupwatch import BackupWatch
+from .planner import Planner
+from .softwareinv import SoftwareInventory
 
 
 def _now_iso():
@@ -713,6 +715,8 @@ class MonitorService:
         self.watchdog = ParkWatchdog(self)
         self.runbooks = RunbookRunner(self)
         self.backupwatch = BackupWatch(self)
+        self.planner = Planner(self)
+        self.softwareinv = SoftwareInventory(self)
 
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
@@ -751,6 +755,9 @@ class MonitorService:
                 mbps REAL, direction TEXT DEFAULT 'down', bytes INTEGER)""")
             self.db.execute("""CREATE INDEX IF NOT EXISTS idx_speedtest_ts
                                ON speedtest_log(timestamp)""")
+            # --- платформа отдела ---
+            # свои таблицы модули создают сами (planner_state, sw_inventory,
+            # миграция hosts — в Inventory.__init__)
         except Exception as e:
             print(f"[db] таблицы NetPulse: {e}")
 
@@ -781,6 +788,8 @@ class MonitorService:
             self.watchdog.start()
         if self.cfg.get("backupwatch", {}).get("enabled"):
             self.backupwatch.start()
+        if self.cfg.get("planner", {}).get("enabled"):
+            self.planner.start()
 
         admin = _is_admin()
         with self._lock:
@@ -794,7 +803,8 @@ class MonitorService:
                         lambda: self.mtr.stop(),
                         lambda: self.capture.stop(),
                         lambda: self.watchdog.stop(),
-                        lambda: self.backupwatch.stop()):
+                        lambda: self.backupwatch.stop(),
+                        lambda: self.planner.stop()):
             try:
                 stopper()
             except Exception:
