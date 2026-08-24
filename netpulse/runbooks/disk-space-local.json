@@ -1,0 +1,8 @@
+{
+  "id": "disk-space-local",
+  "name": "Диски этого сервера",
+  "description": "Быстрый взгляд на свободное место локально",
+  "scope": "local",
+  "command": "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID,@{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,1)}} | Format-Table -AutoSize",
+  "params": []
+}

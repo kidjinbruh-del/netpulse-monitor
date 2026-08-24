@@ -1,0 +1,13 @@
+{
+  "id": "restart-spooler",
+  "name": "Перезапустить очередь печати (удалённо)",
+  "description": "Лечит «принтер не печатает» без выезда: спулер на машине юзера",
+  "scope": "remote",
+  "command": "Restart-Service -Name Spooler -Force",
+  "params": [
+    {
+      "name": "host",
+      "required": true
+    }
+  ]
+}

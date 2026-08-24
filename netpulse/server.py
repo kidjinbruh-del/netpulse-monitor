@@ -742,6 +742,101 @@ class Api:
             "recent_alerts": list(self.svc.live_alerts),
         }
 
+    # ----- платформа отдела: журнал / парк / кнопки -----
+
+    def journal_list(self, q):
+        limit = min(int(q.get("limit", ["150"])[0] or 150), 500)
+        source = q.get("source", [None])[0]
+        text = q.get("q", [None])[0]
+        return {"entries": self.svc.journal.list_entries(limit, source, text)}
+
+    def journal_add(self, q):
+        body = self._read_body()
+        return self.svc.journal.add(
+            text=body.get("text"),
+            source=str(body.get("source") or "manual"),
+            host=body.get("host"),
+            user_name=body.get("user"),
+            minutes=body.get("minutes") or 0)
+
+    def journal_delete(self, q):
+        body = self._read_body()
+        return self.svc.journal.delete(body.get("id"))
+
+    def journal_report(self, q):
+        days = q.get("days", ["30"])[0]
+        rep = self.svc.journal.month_report(days)
+        worst = self.svc.inventory.worst_hosts(3) if hasattr(
+            self.svc, "inventory") else []
+        rep["worst_hosts"] = worst
+        return rep
+
+    def hosts_list(self, q):
+        return {"hosts": self.svc.inventory.list_hosts(),
+                "watchdog": self.svc.watchdog.status()}
+
+    def host_detail_ep(self, q):
+        try:
+            hid = int(q.get("id", ["0"])[0])
+        except ValueError:
+            return (400, {"error": "нужен числовой id"})
+        d = self.svc.inventory.host_detail(hid)
+        return (404, d) if d.get("error") else d
+
+    def events_feed(self, q):
+        limit = min(int(q.get("limit", ["80"])[0] or 80), 300)
+        hid = q.get("host_id", [None])[0]
+        if hid:
+            try:
+                hid = int(hid)
+            except ValueError:
+                hid = None
+        return {"events": self.svc.inventory.recent_events(limit, hid)}
+
+    def health_recompute(self, q):
+        return self.svc.inventory.recompute_health()
+
+    def watchdog_poll(self, q):
+        job_id = submit_job(self.svc.watchdog.poll_cycle)
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            j = JOBS.get(job_id, {})
+            if j.get("status") != "running":
+                return j.get("result") if j.get("status") == "done" \
+                    else {"error": j.get("error")}
+            time.sleep(1.5)
+        return (504, {"error": "обход превысил таймаут"})
+
+    def runbooks_list(self, q):
+        return {"runbooks": self.svc.runbooks.list(),
+                "log": self.svc.runbooks.recent_log(20)}
+
+    def runbook_exec(self, q):
+        body = self._read_body()
+        rb = str(body.get("name") or "").strip()
+        params = body.get("params") if isinstance(body.get("params"), dict) \
+            else {}
+        actor = str(body.get("actor") or "admin")
+        res = self.svc.runbooks.execute(rb, params, actor)
+        code = 200 if res.get("ok") else 400
+        return (code, res)
+
+    def backup_status_list(self, q):
+        return {"backups": self.svc.backupwatch.status_list(),
+                "enabled": bool(self.cfg.get("backupwatch", {})
+                                .get("enabled"))}
+
+    def backup_check_now(self, q):
+        job_id = submit_job(self.svc.backupwatch.check_once)
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            j = JOBS.get(job_id, {})
+            if j.get("status") != "running":
+                return j.get("result") if j.get("status") == "done" \
+                    else {"error": j.get("error")}
+            time.sleep(1)
+        return (504, {"error": "проверка превысила таймаут"})
+
     # ----- служебное -----
 
     def _read_body(self):
@@ -765,6 +860,10 @@ ROUTES_GET = {
     "securityresult": "security_result",
     "alerts": "alerts", "ai": "ai_stats",
     "settings": "settings_get", "backuplist": "backup_list",
+    "journal": "journal_list", "journalreport": "journal_report",
+    "hosts": "hosts_list", "hostdetail": "host_detail_ep",
+    "events": "events_feed", "runbooks": "runbooks_list",
+    "backupstatus": "backup_status_list",
 }
 ROUTES_POST = {
     "settings": "settings_post",
@@ -776,6 +875,9 @@ ROUTES_POST = {
     "fwblockip": "firewall_block_ip", "fwblockapp": "firewall_block_app",
     "fwunblock": "firewall_unblock",
     "backuprun": "backup_run",
+    "journaladd": "journal_add", "journaldel": "journal_delete",
+    "runbookexec": "runbook_exec", "watchdogpoll": "watchdog_poll",
+    "healthrecompute": "health_recompute", "backupcheck": "backup_check_now",
 }
 
 
@@ -954,6 +1056,23 @@ class Handler(BaseHTTPRequestHandler):
             f"np_traffic_total_down_mb {s['total_down_mb']}",
             f"np_traffic_total_up_mb {s['total_up_mb']}",
         ]
+        try:
+            j24 = self.api.svc.db.execute(
+                """SELECT COUNT(*) AS n FROM journal
+                   WHERE timestamp > datetime('now','localtime','-1 day')""",
+                fetch=True)
+            hosts_n = self.api.svc.db.execute(
+                "SELECT COUNT(*) AS n FROM hosts", fetch=True)
+            lines += [
+                "# HELP np_journal_entries_24h Journal entries last 24h",
+                "# TYPE np_journal_entries_24h gauge",
+                f"np_journal_entries_24h {(j24[0]['n'] if j24 else 0) or 0}",
+                "# HELP np_hosts_total Known machines",
+                "# TYPE np_hosts_total gauge",
+                f"np_hosts_total {(hosts_n[0]['n'] if hosts_n else 0) or 0}",
+            ]
+        except Exception:
+            pass
         body = "\n".join(lines).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

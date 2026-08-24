@@ -190,8 +190,9 @@ function sparklineSVG(values, color) {
 /* ================= UI ================= */
 
 const VIEW_TITLES = {
-  dashboard: "Дашборд", apps: "Приложения и сеть", traffic: "Соединения и интерфейсы",
-  diag: "Диагностика сети", lan: "Локальная сеть", capture: "Захват пакетов",
+  dashboard: "Дашборд", journal: "Журнал работ", apps: "Приложения и сеть",
+  traffic: "Соединения и интерфейсы", diag: "Диагностика сети",
+  lan: "Локальная сеть", park: "Парк ПК", capture: "Захват пакетов",
   security: "Безопасность и IDS", ai: "AI-аналитика", alerts: "Алерты",
   history: "История", settings: "Настройки",
 };
@@ -261,6 +262,8 @@ const UI = {
     if (view === "alerts") this.loadAlerts();
     if (view === "history") this.loadHistory();
     if (view === "settings") this.loadSettings();
+    if (view === "journal") this.loadJournal();
+    if (view === "park") this.loadPark();
   },
 
   /* ---------- живой поток состояния ---------- */
@@ -940,6 +943,144 @@ const UI = {
       ]);
     } catch (e) { toast(String(e), true); }
   },
+
+  /* ---------- журнал работ ---------- */
+  async loadJournal() {
+    try {
+      const d = await apiGet("journal?limit=200");
+      const tb = $("journal-table").querySelector("tbody");
+      const srcColor = { manual: "INFO", chat: "WARN", watchdog: "CRITICAL",
+                         runbook: "INFO", backup: "WARN" };
+      tb.innerHTML = d.entries.length ? d.entries.map(e => `
+        <tr>
+          <td class="mono">${esc(String(e.timestamp).slice(5, 16).replace("T", " "))}</td>
+          <td><span class="chip ${srcColor[e.source] || "INFO"}">${esc(e.source)}</span></td>
+          <td>${esc(e.user_name || e.host || "")}</td>
+          <td>${esc(e.text)}</td>
+          <td class="mono">${e.minutes ? e.minutes : ""}</td>
+          <td><button class="mini-btn" title="удалить" onclick="UI.journalDel(${e.id})">✕</button></td>
+        </tr>`).join("") : `<tr><td colspan="6" class="muted">Пока пусто — добавьте первую запись</td></tr>`;
+      this.loadJournalReport();
+    } catch (e) { toast(String(e), true); }
+  },
+  async journalAdd() {
+    const text = $("jr-text").value.trim();
+    if (!text) { toast("Введите текст записи", true); return; }
+    try {
+      await apiPost("journaladd", {
+        text,
+        user: $("jr-user").value.trim(),
+        minutes: parseInt($("jr-min").value || "0", 10),
+        source: "manual",
+      });
+      $("jr-text").value = ""; $("jr-min").value = "";
+      toast("Запись добавлена");
+      this.loadJournal();
+    } catch (e) { toast(String(e), true); }
+  },
+  async journalDel(id) {
+    try {
+      await apiPost("journaldel", { id });
+      this.loadJournal();
+    } catch (e) { toast(String(e), true); }
+  },
+  async loadJournalReport() {
+    try {
+      const r = await apiGet("journalreport?days=30");
+      const src = (r.by_source || []).map(s =>
+        `${esc(s.source)}: ${s.n} (${s.minutes} мин)`).join(" · ") || "нет данных";
+      const users = (r.top_users || []).slice(0, 3).map(u =>
+        `${esc(u.who)} — ${u.n}`).join(", ");
+      const hosts = (r.top_hosts || []).slice(0, 3).map(h =>
+        `${esc(h.host)} — ${h.n}`).join(", ");
+      $("jr-report").innerHTML =
+        `Записей: <b>${r.entries}</b> · Времени: <b>${r.minutes} мин</b> (${r.hours} ч)<br>` +
+        `<span class="muted">По источникам:</span> ${src}` +
+        (users ? `<br><span class="muted">Чаще всего:</span> ${users}` : "") +
+        (hosts ? `<br><span class="muted">Топ машин:</span> ${hosts}` : "");
+    } catch (e) { void e; }
+  },
+
+  /* ---------- парк ПК / сторож / runbooks ---------- */
+  async loadPark() {
+    try {
+      const [h, ev, rb] = await Promise.all([
+        apiGet("hosts"), apiGet("events?limit=60"), apiGet("runbooks")]);
+      const wd = h.watchdog || {};
+      $("park-status").textContent = wd.running
+        ? `Сторож активен: обход каждые ${wd.interval_min} мин, машин в списке: ${wd.hosts.length}`
+        : "Сторож выключен — включите в config.json: \"watchdog\": {\"enabled\": true}";
+      $("park-table").querySelector("tbody").innerHTML = h.hosts.length
+        ? h.hosts.map(m => {
+            const score = m.health_score ?? 100;
+            const color = score >= 80 ? "#22d3a7" : score >= 50 ? "#f5b942" : "#ff5c74";
+            return `<tr>
+              <td>${esc(m.name)}</td>
+              <td class="mono">${esc(m.ip || "")}</td>
+              <td class="muted">${esc((m.os || "").slice(0, 28))}</td>
+              <td>${m.online ? "🟢" : "🔴"}</td>
+              <td><span style="color:${color};font-weight:600">${score}</span></td>
+              <td class="muted">${esc(String(m.last_seen || "").slice(5, 16).replace("T", " "))}</td>
+            </tr>`;
+          }).join("")
+        : `<tr><td colspan="6" class="muted">Парк пуст — включите сторож или нажмите «Обход сейчас»</td></tr>`;
+      $("events-table").querySelector("tbody").innerHTML = ev.events.length
+        ? ev.events.map(x => {
+            const sev = x.severity === "CRITICAL" ? "CRITICAL"
+                      : x.severity === "HIGH" ? "WARN" : "INFO";
+            return `<tr>
+              <td class="mono">${esc(String(x.timestamp).slice(5, 16).replace("T", " "))}</td>
+              <td>${esc(x.host || "")}</td>
+              <td><span class="chip ${sev}">${esc(x.kind)}</span></td>
+              <td class="muted">${esc(x.severity)}</td>
+              <td>${esc(x.text)}</td>
+            </tr>`;
+          }).join("")
+        : `<tr><td colspan="5" class="muted">Событий нет</td></tr>`;
+      $("rb-list").innerHTML = rb.runbooks.length
+        ? rb.runbooks.map(b =>
+            `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+               <button class="btn accent" onclick="UI.runbookExec('${esc(b.id)}')">${esc(b.name)}</button>
+               <span class="muted">${esc(b.description || b.scope)}${b.params?.length ? " · параметры: " + esc(b.params.join(", ")) : ""}</span>
+             </div>`).join("")
+        : "Runbooks не найдены";
+    } catch (e) { toast(String(e), true); }
+  },
+  async watchdogPoll() {
+    const btn = $("park-poll-btn");
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = "Опрос...";
+    try {
+      const r = await apiPost("watchdogpoll", {});
+      $("park-status").textContent =
+        `Обход завершён: опрошено ${r.polled ?? 0} машин`;
+      this.loadPark();
+    } catch (e) {
+      btn.textContent = old; btn.disabled = false;
+      toast(String(e), true);
+      return;
+    }
+    btn.textContent = old; btn.disabled = false;
+  },
+  async healthRecompute() {
+    try {
+      await apiPost("healthrecompute", {});
+      toast("Карма пересчитана");
+      this.loadPark();
+    } catch (e) { toast(String(e), true); }
+  },
+  async runbookExec(name) {
+    if (!confirm(`Выполнить «${name}»?`)) return;
+    try {
+      const r = await apiPost("runbookexec", { name, params: {} });
+      const out = $("rb-output");
+      out.classList.remove("hidden");
+      out.textContent = `[${r.ok ? "OK" : "FAIL"} код ${r.exit_code}, ${r.seconds}s]\n${r.output || "(без вывода)"}`;
+      this.loadPark();
+    } catch (e) { toast(String(e), true); }
+  },
+
 
   /* ---------- settings ---------- */
   async loadSettings() {

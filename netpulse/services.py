@@ -27,6 +27,12 @@ import psutil
 from core import DatabaseManager, Pinger, SecurityScanner
 from ai import AIOrchestrator
 
+from .journal import WorkJournal
+from .inventory import Inventory
+from .watchdog import ParkWatchdog
+from .runbooks import RunbookRunner
+from .backupwatch import BackupWatch
+
 
 def _now_iso():
     return datetime.now().isoformat()
@@ -701,6 +707,13 @@ class MonitorService:
         self.capture = RawCaptureService(self)
         self.quota = QuotaManager(self)
 
+        # Платформа отдела: журнал, парк, сторожа, кнопки
+        self.journal = WorkJournal(self)
+        self.inventory = Inventory(self)
+        self.watchdog = ParkWatchdog(self)
+        self.runbooks = RunbookRunner(self)
+        self.backupwatch = BackupWatch(self)
+
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._threads = []
@@ -764,6 +777,11 @@ class MonitorService:
             t.start()
             self._threads.append(t)
 
+        if self.cfg.get("watchdog", {}).get("enabled"):
+            self.watchdog.start()
+        if self.cfg.get("backupwatch", {}).get("enabled"):
+            self.backupwatch.start()
+
         admin = _is_admin()
         with self._lock:
             self.snapshot["mode"]["admin"] = admin
@@ -774,7 +792,9 @@ class MonitorService:
         for stopper in (lambda: self.pinger.stop(),
                         lambda: self.ai.stop(),
                         lambda: self.mtr.stop(),
-                        lambda: self.capture.stop()):
+                        lambda: self.capture.stop(),
+                        lambda: self.watchdog.stop(),
+                        lambda: self.backupwatch.stop()):
             try:
                 stopper()
             except Exception:

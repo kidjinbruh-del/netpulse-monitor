@@ -68,6 +68,28 @@ DEFAULTS = {
         "time": "03:00",
         "keep": 7,
         "dir": "C:\\Backups"
+    },
+    "journal": {
+        "default_minutes": 0
+    },
+    "watchdog": {
+        "enabled": False,
+        "interval_min": 15,
+        "timeout_sec": 25,
+        "hosts": ["127.0.0.1"],
+        "disk_free_pct": 10,
+        "ram_free_mb": 500,
+        "event_ids": [41, 6008, 7, 153, 7031, 7034],
+        "event_hours": 24,
+        "offline_after_polls": 3
+    },
+    "runbooks": {
+        "enabled": True
+    },
+    "backupwatch": {
+        "enabled": False,
+        "drill_reminder": True,
+        "resources": []
     }
 }
 

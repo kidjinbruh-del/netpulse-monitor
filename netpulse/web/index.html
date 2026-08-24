@@ -49,10 +49,12 @@
 
     <nav id="nav">
       <button data-view="dashboard" class="nav-btn active"><svg class="ic"><use href="#i-dash"/></svg>Дашборд</button>
+      <button data-view="journal" class="nav-btn"><svg class="ic"><use href="#i-clock"/></svg>Журнал</button>
       <button data-view="apps" class="nav-btn"><svg class="ic"><use href="#i-apps"/></svg>Приложения<span id="apps-live-dot" class="live-dot hidden"></span></button>
       <button data-view="traffic" class="nav-btn"><svg class="ic"><use href="#i-globe"/></svg>Соединения</button>
       <button data-view="diag" class="nav-btn"><svg class="ic"><use href="#i-route"/></svg>Диагностика</button>
       <button data-view="lan" class="nav-btn"><svg class="ic"><use href="#i-lan"/></svg>Локальная сеть</button>
+      <button data-view="park" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Парк ПК</button>
       <button data-view="capture" class="nav-btn"><svg class="ic"><use href="#i-capture"/></svg>Захват пакетов</button>
       <button data-view="security" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Безопасность<span id="ids-badge" class="badge hidden">0</span></button>
       <button data-view="ai" class="nav-btn"><svg class="ic"><use href="#i-chip"/></svg>AI-аналитика</button>
@@ -131,6 +133,36 @@
           <div class="card-title mt18">Квота трафика</div>
           <div id="dash-quota" class="quota-box muted">лимиты не заданы</div>
         </div>
+      </div>
+    </section>
+
+    <!-- ============ JOURNAL ============ -->
+    <section class="view" id="view-journal">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Новая запись</div>
+          <input class="inp" id="jr-text" placeholder="Что случилось / что сделали...">
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input class="inp" id="jr-user" placeholder="Кто / где" style="flex:1">
+            <input class="inp" id="jr-min" type="number" min="0" placeholder="минут" style="width:90px">
+            <button class="btn accent" onclick="UI.journalAdd()">Добавить</button>
+          </div>
+          <div id="jr-status" class="result-box muted">Звонок, визит, задача — фиксируйте в одно действие, отчёт соберётся сам</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Отчёт за 30 дней
+            <button class="btn ghost right" onclick="UI.loadJournalReport()"><svg class="ic sm"><use href="#i-refresh"/></svg>Обновить</button>
+          </div>
+          <div id="jr-report" class="result-box muted">—</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Последние записи
+          <button class="mini-btn right" onclick="UI.loadJournal()"><svg class="ic sm"><use href="#i-refresh"/></svg></button>
+        </div>
+        <table class="tbl" id="journal-table">
+          <thead><tr><th>Время</th><th>Источник</th><th>Кто/где</th><th>Запись</th><th>Мин</th><th></th></tr></thead>
+          <tbody></tbody></table>
       </div>
     </section>
 
@@ -231,6 +263,37 @@
         <table class="tbl" id="lan-table">
           <thead><tr><th>IP</th><th>MAC</th><th>Вендор</th><th>Hostname</th><th>Первый раз</th><th>Последний раз</th><th></th></tr></thead>
           <tbody></tbody></table>
+      </div>
+    </section>
+
+    <!-- ============ PARK ============ -->
+    <section class="view" id="view-park">
+      <div class="card">
+        <div class="card-title">Парк ПК и «карма» машин
+          <span class="right">
+            <button class="btn ghost" onclick="UI.healthRecompute()">Пересчитать карму</button>
+            <button class="btn accent" id="park-poll-btn" onclick="UI.watchdogPoll()"><svg class="ic sm"><use href="#i-play"/></svg>Обход сейчас</button>
+          </span>
+        </div>
+        <div id="park-status" class="result-box muted">Сторож опрашивает машины из списка watchdog.hosts (WinRM/WMI через PowerShell). Включается в config.json: "watchdog": {"enabled": true}</div>
+        <table class="tbl" id="park-table">
+          <thead><tr><th>Машина</th><th>IP</th><th>ОС</th><th>Онлайн</th><th>Карма</th><th>Виден</th></tr></thead>
+          <tbody></tbody></table>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">События парка
+            <button class="mini-btn right" onclick="UI.loadPark()"><svg class="ic sm"><use href="#i-refresh"/></svg></button>
+          </div>
+          <table class="tbl" id="events-table">
+            <thead><tr><th>Время</th><th>Машина</th><th>Тип</th><th>Тяжесть</th><th>Описание</th></tr></thead>
+            <tbody></tbody></table>
+        </div>
+        <div class="card">
+          <div class="card-title">Runbooks — кнопки вместо рутины</div>
+          <div id="rb-list" class="result-box muted">—</div>
+          <div id="rb-output" class="result-box mono hidden"></div>
+        </div>
       </div>
     </section>
 

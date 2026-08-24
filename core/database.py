@@ -13,7 +13,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 DB_PATH = "network_stats.db"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 class DatabaseManager:
     """Потокобезопасный менеджер БД с пулом соединений
@@ -158,6 +158,51 @@ class DatabaseManager:
                     confidence REAL,
                     trend REAL
                 )''')
+
+                # --- Платформа отдела (v3): парк, события, журнал, кнопки ---
+                conn.execute('''CREATE TABLE IF NOT EXISTS hosts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    ip TEXT, os TEXT,
+                    first_seen TEXT, last_seen TEXT, updated_at TEXT,
+                    online INTEGER DEFAULT 0,
+                    health_score INTEGER DEFAULT 100
+                )''')
+
+                conn.execute('''CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    host_id INTEGER,
+                    kind TEXT, severity TEXT DEFAULT 'MEDIUM',
+                    source TEXT DEFAULT 'watchdog',
+                    text TEXT, dedup_key TEXT
+                )''')
+
+                conn.execute('''CREATE TABLE IF NOT EXISTS journal (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    source TEXT DEFAULT 'manual',
+                    host_id INTEGER,
+                    user_name TEXT,
+                    text TEXT NOT NULL,
+                    minutes INTEGER DEFAULT 0
+                )''')
+
+                conn.execute('''CREATE TABLE IF NOT EXISTS runbook_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    runbook TEXT, params TEXT,
+                    actor TEXT DEFAULT 'admin', target TEXT,
+                    exit_code INTEGER, output TEXT
+                )''')
+
+                conn.execute('''CREATE TABLE IF NOT EXISTS backup_status (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    resource TEXT UNIQUE NOT NULL,
+                    path TEXT, interval_h INTEGER DEFAULT 24,
+                    last_ok TEXT, ok INTEGER DEFAULT 0
+                )''')
+
                 
                 # Миграция старых схем (добавление колонок) ДО создания индексов,
                 # иначе индексы по новым колонкам упадут на старых таблицах
@@ -169,6 +214,10 @@ class DatabaseManager:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_pings_target ON pings(target)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_ts ON ai_predictions(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_events_host ON events(host_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_events_dedup ON events(dedup_key)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_journal_ts ON journal(timestamp)")
 
                 current_version = conn.execute("PRAGMA user_version").fetchone()[0]
                 if current_version < SCHEMA_VERSION:
