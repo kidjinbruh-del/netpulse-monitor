@@ -369,7 +369,7 @@ class LANNetworkScanner:
             text = decode_process_output(out.stdout)
             for line in text.splitlines():
                 m = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b.*?"
-                              r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})", line)
+                              r"([0-9a-fA-F]{2}(?:[:\-][0-9a-fA-F]{2}){5})", line)
                 if m:
                     table[m.group(1)] = m.group(2).lower().replace("-", ":")
         except Exception:
