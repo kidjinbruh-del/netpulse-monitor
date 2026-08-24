@@ -149,7 +149,7 @@ class ParkWatchdog:
         timeout_sec = int(cfg.get("timeout_sec", 25))
         try:
             data = self._collect(host, timeout_sec)
-        except Exception:
+        except Exception as e:
             # WinRM не ответил: различаем «машина выключена» и «жива, но не Windows»
             ping_ip = "127.0.0.1" if self._is_local(host) else host
             from netpulse.infra import ping as infra_ping
