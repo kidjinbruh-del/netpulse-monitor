@@ -1379,6 +1379,8 @@ const UI = {
         (cfg.web_token ? cfg.web_token.slice(0, 6) + "..." + cfg.web_token.slice(-4) : "");
       $("set-tg-on").checked = !!cfg.telegram?.enabled;
       $("set-tg-token").value = cfg.telegram?.token || "";
+      $("set-wh-on").checked = !!cfg.webhook?.enabled;
+      $("set-wh-url").value = cfg.webhook?.url || "";
       $("set-tg-chat").value = cfg.telegram?.chat_id || "";
       $("set-backup-on").checked = !!cfg.backup?.enabled;
       $("set-backup-time").value = cfg.backup?.time || "03:00";
@@ -1422,6 +1424,10 @@ const UI = {
           enabled: $("set-tg-on").checked,
           token: $("set-tg-token").value.trim(),
           chat_id: $("set-tg-chat").value.trim(),
+        },
+        webhook: {
+          enabled: $("set-wh-on").checked,
+          url: $("set-wh-url").value.trim(),
         },
         backup: {
           enabled: $("set-backup-on").checked,

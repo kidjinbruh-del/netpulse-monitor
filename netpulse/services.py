@@ -11,6 +11,7 @@ MonitorService - единый источник живого состояния:
 - запись истории в SQLite
 """
 
+import json
 import time
 import socket
 import struct
@@ -35,7 +36,9 @@ from .backupwatch import BackupWatch
 from .planner import Planner
 from .softwareinv import SoftwareInventory
 from .infra import Infra
+import logging
 
+logger = logging.getLogger(__name__)
 
 def _now_iso():
     return datetime.now().isoformat()
@@ -396,7 +399,7 @@ class LANNetworkScanner:
             try:
                 self.scan()
             except Exception as e:
-                print(f"[lan] auto-scan: {e}")
+                logger.info(f"[lan] auto-scan: {e}")
             self.svc._stop_event.wait(max(60, int(interval_min) * 60))
 
     def arp_table(self):
@@ -815,11 +818,20 @@ class MonitorService:
                 mbps REAL, direction TEXT DEFAULT 'down', bytes INTEGER)""")
             self.db.execute("""CREATE INDEX IF NOT EXISTS idx_speedtest_ts
                                ON speedtest_log(timestamp)""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                user TEXT, ip TEXT,
+                action TEXT NOT NULL,
+                status INTEGER,
+                details TEXT)""")
+            self.db.execute("""CREATE INDEX IF NOT EXISTS idx_audit_ts
+                               ON audit_log(timestamp)""")
             # --- платформа отдела ---
             # свои таблицы модули создают сами (planner_state, sw_inventory,
             # миграция hosts — в Inventory.__init__)
         except Exception as e:
-            print(f"[db] таблицы NetPulse: {e}")
+            logger.info(f"[db] таблицы NetPulse: {e}")
 
     # ---------- жизненный цикл ----------
 
@@ -831,7 +843,7 @@ class MonitorService:
                 if hist and len(hist) >= 10:
                     self.ai.train_model(hist)
             except Exception as e:
-                print(f"[ai] стартовое обучение: {e}")
+                logger.info(f"[ai] стартовое обучение: {e}")
             self.ai.start_background_training()
 
         for name, target in (
@@ -861,7 +873,7 @@ class MonitorService:
         admin = _is_admin()
         with self._lock:
             self.snapshot["mode"]["admin"] = admin
-        print(f"[netpulse] мониторинг запущен (админ: {'да' if admin else 'нет'})")
+        logger.info(f"[netpulse] мониторинг запущен (админ: {'да' if admin else 'нет'})")
 
     def stop(self):
         self._stop_event.set()
@@ -926,7 +938,7 @@ class MonitorService:
                     self.history.append((now, snap["down_kbps"], snap["up_kbps"],
                                          snap["ping"].get("current")))
             except Exception as e:
-                print(f"[traffic] {e}")
+                logger.info(f"[traffic] {e}")
             self._stop_event.wait(1)
 
     def _tick_loop(self):
@@ -994,7 +1006,7 @@ class MonitorService:
                         pass
                     self._build_state_cache()
             except Exception as e:
-                print(f"[tick] {e}")
+                logger.info(f"[tick] {e}")
             self._stop_event.wait(1)
 
     def _procmon_loop(self):
@@ -1002,7 +1014,7 @@ class MonitorService:
             try:
                 self.procmon.sample()
             except Exception as e:
-                print(f"[procmon] {e}")
+                logger.info(f"[procmon] {e}")
             self._stop_event.wait(2)
 
     def _cleanup_loop(self):
@@ -1011,7 +1023,7 @@ class MonitorService:
             try:
                 self.db.cleanup_old_records(self.cfg.get("db_cleanup_days", 30))
             except Exception as e:
-                print(f"[cleanup] {e}")
+                logger.info(f"[cleanup] {e}")
 
     # ---------- кэш состояния для SSE ----------
 
@@ -1201,7 +1213,7 @@ class MonitorService:
                     "up_kbps": (live.get(name, {}) or {}).get("up_kbps", 0),
                 })
             except Exception as e:
-                print(f"[ifaces] {name}: {e}")
+                logger.info(f"[ifaces] {name}: {e}")
         return info
 
     # ---------- алерты ----------
@@ -1223,28 +1235,45 @@ class MonitorService:
                     "message": message, "source": source})
             self.notify_external(alert_type, message)
         except Exception as e:
-            print(f"[alerts] {e}")
+            logger.info(f"[alerts] {e}")
 
     def notify_external(self, alert_type, message):
         tg = self.cfg.get("telegram", {})
-        if not (tg.get("enabled") and tg.get("token") and tg.get("chat_id")):
-            return
+        if tg.get("enabled") and tg.get("token") and tg.get("chat_id"):
+            def send_tg():
+                try:
+                    url = (f"https://api.telegram.org/bot{tg['token']}/sendMessage")
+                    from urllib.request import Request, urlopen
+                    import urllib.parse
+                    body = urllib.parse.urlencode({
+                        "chat_id": tg["chat_id"],
+                        "text": f"[NetPulse] {alert_type}\n{message}",
+                    }).encode()
+                    req = Request(url, data=body)
+                    urlopen(req, timeout=5)
+                except Exception:
+                    pass
+            threading.Thread(target=send_tg, daemon=True).start()
 
-        def send():
-            try:
-                url = (f"https://api.telegram.org/bot{tg['token']}/sendMessage")
-                from urllib.request import Request, urlopen
-                import urllib.parse
-                body = urllib.parse.urlencode({
-                    "chat_id": tg["chat_id"],
-                    "text": f"[NetPulse] {alert_type}\n{message}",
-                }).encode()
-                req = Request(url, data=body)
-                urlopen(req, timeout=5)
-            except Exception:
-                pass
-
-        threading.Thread(target=send, daemon=True).start()
+        # Generic webhook: Slack/Discord/Mattermost/Teams/свой бэкенд
+        wh = self.cfg.get("webhook") or {}
+        if wh.get("enabled") and wh.get("url"):
+            def send_hook():
+                try:
+                    from urllib.request import Request, urlopen
+                    payload = json.dumps({
+                        "type": alert_type, "message": message,
+                        "source": "netpulse",
+                        "ts": _now_iso(),
+                        "text": f"[NetPulse] {alert_type}: {message}",
+                    }, ensure_ascii=False).encode("utf-8")
+                    req = Request(wh["url"], data=payload,
+                                  headers={"Content-Type":
+                                           "application/json; charset=utf-8"})
+                    urlopen(req, timeout=5)
+                except Exception:
+                    pass
+            threading.Thread(target=send_hook, daemon=True).start()
 
     # ---------- сохранение ----------
 
@@ -1311,14 +1340,17 @@ class MonitorService:
         from .config import merge_updates, save_config
         merge_updates(self.cfg, updates)
         save_config(self.cfg)
-        self.pinger.set_target(self.cfg.get("ping_target", "8.8.8.8"))
-        self.pinger.set_thresholds(self._alert_thresholds())
+        try:
+            self.pinger.set_target(self.cfg.get("ping_target", "8.8.8.8"))
+            self.pinger.set_thresholds(self._alert_thresholds())
+        except Exception as e:
+            logger.warning(f"apply_settings: пингер не обновлён: {e}")
         try:
             self.ai.set_enabled(bool(self.cfg.get("ai", {}).get("enabled", True)))
             th = float(self.cfg.get("ai", {}).get("anomaly_threshold", 0.6))
             self.ai.traffic_agent.anomaly_threshold = th
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"apply_settings: AI не обновлён: {e}")
         return True
 
 

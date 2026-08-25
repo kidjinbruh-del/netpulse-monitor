@@ -28,7 +28,9 @@ from core.utils import decode_process_output
 
 from . import __version__
 from .services import MonitorService
+import logging
 
+logger = logging.getLogger(__name__)
 WORKERS = ThreadPoolExecutor(max_workers=6, thread_name_prefix="np-worker")
 JOBS = {}
 
@@ -313,7 +315,7 @@ class BackupManager:
                     f.write(today_stamp)
                 self.rotate(int(bc.get("keep", 7)))
         except Exception as e:
-            print(f"[backup] {e}")
+            logger.info(f"[backup] {e}")
 
     def run_backup_now(self, rar=None):
         """Бэкап исходников: WinRAR, если установлен, иначе zip из stdlib."""
@@ -336,9 +338,9 @@ class BackupManager:
                                    creationflags=flags)
                 if r.returncode == 0:
                     return {"ok": True, "archive": dest}
-                print(f"[backup] rar завершился с кодом {r.returncode}, fallback на zip")
+                logger.info(f"[backup] rar завершился с кодом {r.returncode}, fallback на zip")
             except Exception as e:
-                print(f"[backup] rar недоступен ({e}), fallback на zip")
+                logger.warning(f"[backup] rar недоступен ({e}), fallback на zip")
 
         dest = os.path.join(dest_dir, f"netpulse_auto_{stamp}.zip")
         try:
@@ -1139,6 +1141,14 @@ class Api:
         return {"user": user,
                 "auth_enabled": bool(self.cfg.get("web_auth_enabled"))}
 
+    def audit(self, q):
+        limit = min(int(q.get("limit", ["100"])[0] or 100), 500)
+        rows = self.svc.db.execute(
+            """SELECT timestamp, user, ip, action, status, details
+               FROM audit_log ORDER BY id DESC LIMIT ?""",
+            (limit,), fetch=True) or []
+        return {"entries": rows}
+
     def selftest(self, q):
         checks = []
 
@@ -1238,6 +1248,7 @@ ROUTES_GET = {
     "securityresult": "security_result",
     "alerts": "alerts", "ai": "ai_stats",
     "settings": "settings_get", "backuplist": "backup_list",
+    "audit": "audit",
     "journal": "journal_list", "journalreport": "journal_report",
     "hosts": "hosts_list", "hostdetail": "host_detail_ep",
     "events": "events_feed", "runbooks": "runbooks_list",
@@ -1672,13 +1683,36 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = getattr(self.api, handler_name)(qs)
             if isinstance(result, tuple):
-                self._send_json(result[1], result[0])
+                status_code, payload = result
             else:
-                self._send_json(result)
+                status_code, payload = 200, result
         except BrokenPipeError:
-            pass
+            return
         except Exception as e:
-            self._send_json({"error": str(e)}, 500)
+            status_code, payload = 500, {"error": str(e)}
+        # аудит всех мутаций (append-only) — ДО отправки ответа
+        try:
+            self.api.svc.db.execute(
+                """CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    user TEXT, ip TEXT,
+                    action TEXT NOT NULL,
+                    status INTEGER,
+                    details TEXT)""")
+            details = json.dumps(body, ensure_ascii=False)[:400]
+            for secret in ("token", "web_token"):
+                details = re.sub(
+                    rf'"{secret}"\s*:\s*"[^"]*"', f'"{secret}": "***"', details)
+            self.api.svc.db.execute(
+                """INSERT INTO audit_log
+                   (timestamp, user, ip, action, status, details)
+                   VALUES (?,?,?,?,?,?)""",
+                (datetime.now().isoformat(), self.api._cached_actor, ip, name,
+                 status_code, details))
+        except Exception:
+            pass
+        self._send_json(payload, status_code)
 
 
 def build_server(service: MonitorService, config, backup: BackupManager,
@@ -1687,6 +1721,19 @@ def build_server(service: MonitorService, config, backup: BackupManager,
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
     return httpd
+
+
+def setup_logging():
+    """Ротация: logs/netpulse.log, 2 МБ x 5 + консоль."""
+    os.makedirs("logs", exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        os.path.join("logs", "netpulse.log"),
+        maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    console = logging.StreamHandler()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        handlers=[handler, console])
 
 
 def run(config):
@@ -1707,7 +1754,7 @@ def run(config):
             save_config(config)
         except Exception:
             pass
-        print("[netpulse] ВНИМАНИЕ: веб-интерфейс открыт в локальную сеть — "
+        logger.info("[netpulse] ВНИМАНИЕ: веб-интерфейс открыт в локальную сеть — "
               "авторизация включена принудительно, токен сгенерирован "
               "(config.json -> web_token)")
 
@@ -1726,10 +1773,10 @@ def run(config):
             ctx.load_cert_chain(cert, key)
             httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
             scheme = "https"
-            print(f"[netpulse] HTTPS включён ({cert})")
+            logger.info(f"[netpulse] HTTPS включён ({cert})")
         else:
             scheme = "http"
-            print("[netpulse] TLS: файлы сертификатов не найдены — "
+            logger.warning("[netpulse] TLS: файлы сертификатов не найдены — "
                   "работает HTTP. Сгенерируйте: tools\\make_cert.ps1")
     else:
         scheme = "http"
@@ -1748,11 +1795,11 @@ def run(config):
             pass
         url = " | ".join(f"{scheme}://{ip}:{port}" for ip in ips) or \
               f"{scheme}://{host}:{port}"
-        print("[netpulse] доступ из локальной сети (нужен токен):", url)
-        print("[netpulse] правило firewall (если попросит админ):")
-        print(f'  netsh advfirewall firewall add rule name="NetPulse" '
+        logger.info("[netpulse] доступ из локальной сети (нужен токен):", url)
+        logger.info("[netpulse] правило firewall (если попросит админ):")
+        logger.info(f'  netsh advfirewall firewall add rule name="NetPulse" '
               f'dir=in action=allow protocol=TCP localport={port}')
-    print(f"[netpulse] дашборд: {url}")
+    logger.info(f"[netpulse] дашборд: {url}")
 
     def _open():
         try:
@@ -1764,7 +1811,7 @@ def run(config):
     try:
         httpd.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
-        print("\n[netpulse] остановка...")
+        logger.info("\n[netpulse] остановка...")
     finally:
         try:
             httpd.shutdown()

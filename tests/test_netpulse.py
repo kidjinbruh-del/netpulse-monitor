@@ -130,18 +130,51 @@ def test_backup_rotate():
 
 class MiniService:
     class _MiniDB:
-        def execute(self, *a, **k):
-            return None
+        """Настоящий sqlite in-memory: аудит/таблицы создаются и читаются."""
+        def __init__(self):
+            import sqlite3
+            self._c = sqlite3.connect(":memory:", check_same_thread=False)
+            self._c.row_factory = sqlite3.Row
+
+        def execute(self, q, params=(), fetch=False, **k):
+            try:
+                cur = self._c.execute(q, params)
+                if fetch:
+                    return [dict(r) for r in cur.fetchall()]
+                self._c.commit()
+                return cur.rowcount
+            except Exception:
+                try:
+                    self._c.rollback()
+                except Exception:
+                    pass
+                return None
+
+        def execute_many(self, q, params_list, **k):
+            try:
+                self._c.executemany(q, params_list)
+                self._c.commit()
+                return True
+            except Exception:
+                return False
+
     db = _MiniDB()
 
     class _MiniJournal:
         def list_entries(self, *a, **k):
             return []
+        def add(self, *a, **k):
+            return {"ok": True, "id": 1}
         def month_report(self, *a, **k):
             return {"entries": 0, "minutes": 0, "hours": 0, "by_source": [],
                     "top_users": [], "top_hosts": [], "per_day": []}
     journal = _MiniJournal()
 
+    def apply_settings(self, updates):
+        from netpulse.config import merge_updates, save_config
+        merge_updates(self.cfg, updates)
+        save_config(self.cfg)
+        return True
     def __init__(self):
         self.snapshot = {
             "ts": time.time(), "down_kbps": 12.3, "up_kbps": 4.5,
@@ -183,6 +216,7 @@ def _start_server(cfg_overrides=None):
 
     from netpulse.server import build_server, BackupManager
     httpd = build_server(svc, cfg, BackupManager(cfg), port=0)
+    httpd.svc = svc
     port = httpd.server_address[1]
     th = threading.Thread(target=httpd.serve_forever,
                           kwargs={"poll_interval": 0.2}, daemon=True)
@@ -276,6 +310,75 @@ def test_whoami_identity():
     finally:
         httpd.shutdown()
         reset_auth_state()
+
+
+def test_audit_log_and_config_backup():
+    """Аудит мутаций пишется; перед сохранением конфига создаётся бэкап."""
+    from netpulse.server import reset_auth_state
+    reset_auth_state()
+    httpd, port, cfg = _start_server(
+        {"web_auth_enabled": True, "web_token": "secret123"})
+    base = f"http://127.0.0.1:{port}"
+    try:
+        code, body = _post(base + "/api/journaladd",
+                           {"text": "аудит-тест", "minutes": 3},
+                           {"X-Auth": "secret123"})
+        assert code == 200, f"journaladd: {code} {body[:120]}"
+        code, body = _get(base + "/api/audit?limit=10",
+                          {"X-Auth": "secret123"})
+        assert code == 200, f"audit: {code} {body[:150]}"
+        entries = json.loads(body)["entries"]
+        a = next(e for e in entries if e["action"] == "journaladd")
+        assert a["status"] == 200 and a["user"] == "admin", a
+        # секрет в details замаскирован (меняем telegram-токен, не web_token!)
+        code, _ = _post(base + "/api/settings",
+                        {"telegram": {"token": "sekret"}},
+                        {"X-Auth": "secret123"})
+        code, body = _get(base + "/api/audit?limit=5",
+                          {"X-Auth": "secret123"})
+        assert code == 200, f"audit2: {code} {body[:150]}"
+        entries = json.loads(body)["entries"]
+        a2 = next(e for e in entries if e["action"] == "settings")
+        assert "sekret" not in (a2["details"] or ""), a2
+        # бэкап конфига: повторное сохранение копирует предыдущий файл
+        code, _ = _post(base + "/api/settings", {"theme": "light"},
+                        {"X-Auth": "secret123"})
+        assert code == 200, code
+        backups = os.listdir(os.path.join("backups", "config"))
+        assert len(backups) >= 1, backups
+    finally:
+        httpd.shutdown()
+        reset_auth_state()
+
+
+def test_webhook_payload():
+    """notify_external с webhook шлёт JSON нужной структуры."""
+    import netpulse.services as SvcMod
+    from unittest import mock
+
+    class FakeSvc3: pass
+    fs = FakeSvc3()
+    fs.cfg = {"webhook": {"enabled": True,
+                          "url": "http://127.0.0.1:1/hook"},
+              "telegram": {"enabled": False}}
+    captured = {}
+
+    def fake_urlopen(req, timeout=5):
+        captured["url"] = req.full_url
+        captured["data"] = json.loads(req.data.decode("utf-8"))
+
+        class R:
+            def read(self, n=-1):
+                return b"{}"
+        return R()
+
+    with mock.patch("urllib.request.urlopen", fake_urlopen):
+        SvcMod.MonitorService.notify_external(fs, "TEST_ALERT", "тело")
+
+    assert captured["url"] == "http://127.0.0.1:1/hook"
+    assert captured["data"]["type"] == "TEST_ALERT"
+    assert captured["data"]["message"] == "тело"
+    assert "NetPulse" in captured["data"]["text"]
 
 
 def test_server_endpoints_and_auth():

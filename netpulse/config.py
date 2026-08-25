@@ -6,9 +6,12 @@ import json
 import copy
 import os
 import uuid
+from datetime import datetime
 
 from core.secrets import encrypt_config, decrypt_config
+import logging
 
+logger = logging.getLogger(__name__)
 CONFIG_FILE = "config.json"
 
 DEFAULTS = {
@@ -69,6 +72,10 @@ DEFAULTS = {
         "bytes": 8000000,
         "timeout_sec": 20
     },
+    "webhook": {
+        "enabled": False,
+        "url": ""
+    },
     "telegram": {
         "enabled": False,
         "token": "",
@@ -122,7 +129,7 @@ def load_config(path=CONFIG_FILE):
                 saved = json.load(f)
             _deep_merge(cfg, saved)
     except Exception as e:
-        print(f"[config] ошибка загрузки: {e}")
+        logger.error(f"[config] ошибка загрузки: {e}")
 
     cfg = decrypt_config(cfg)   # dpapi: -> plaintext (в памяти только)
 
@@ -132,14 +139,33 @@ def load_config(path=CONFIG_FILE):
     return cfg
 
 
+def _backup_config(path=CONFIG_FILE, keep=10):
+    """Копия текущего конфига в backups/config/ перед перезаписью."""
+    try:
+        if not os.path.exists(path):
+            return
+        bdir = os.path.join("backups", "config")
+        os.makedirs(bdir, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        import shutil
+        shutil.copy2(path, os.path.join(bdir, f"config.backup_{ts}.json"))
+        old = sorted(f for f in os.listdir(bdir)
+                     if f.startswith("config.backup_"))
+        for f in old[:-keep]:
+            os.remove(os.path.join(bdir, f))
+    except Exception as e:
+        print(f"[config] бэкап не создан: {e}")
+
+
 def save_config(cfg, path=CONFIG_FILE):
     try:
+        _backup_config(path)
         stored = encrypt_config(copy.deepcopy(cfg))   # секреты -> dpapi:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(stored, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
-        print(f"[config] ошибка сохранения: {e}")
+        logger.error(f"[config] ошибка сохранения: {e}")
         return False
 
 

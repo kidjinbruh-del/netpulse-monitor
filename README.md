@@ -44,6 +44,9 @@
 | Firewall | Блокировка IP и приложений через Windows Firewall из дашборда |
 | Аутентификация | Токены, брутфорс-защита (5 промахов → блок IP на 10 мин), бессрочная сессия админа, идентификация (`web_admins`) |
 | Шифрование | Секреты конфига под Windows DPAPI; HTTPS (самоподписанный сертификат) |
+| Аудит | Все мутации через API — в append-only `audit_log` (кто, IP, действие, статус); секреты маскируются |
+| Отказоустойчивость | Бэкап config.json перед каждым изменением (`backups/config/`, последние 10); ротация логов `logs/netpulse.log` |
+| Каналы алертов | Telegram + generic Webhook (Slack/Discord/Mattermost/Teams) |
 
 ### Системные
 Prometheus `/metrics` • SSE-стрим живого состояния • автобэкап (WinRAR/zip) •
