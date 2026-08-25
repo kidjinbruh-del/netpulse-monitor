@@ -135,16 +135,25 @@ class Inventory:
              (text or "")[:1000], dedup_key))
 
         label = ""
+        host_name = None
         if host_id:
             h = db.execute("SELECT name FROM hosts WHERE id = ?",
                            (host_id,), fetch=True)
-            label = f" [{h[0]['name']}]" if h else ""
+            if h:
+                label = f" [{h[0]['name']}]"
+                host_name = h[0]["name"]
         try:
             self.svc.push_alert(
                 f"WATCH_{kind}".upper()[:40],
                 f"{severity}: {text}{label}", source, rate=300)
         except Exception:
             pass
+        try:
+            healing = getattr(self.svc, "healing", None)
+            if healing:
+                healing.on_event(host_id, kind, severity, host_name)
+        except Exception as e:
+            logger.debug("healing: %s", e)
         return {"ok": True}
 
     def recent_events(self, limit=80, host_id=None):

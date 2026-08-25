@@ -7,6 +7,7 @@ sysUpTime, sysContact, sysLocation, ifNumber. Классификация уст�
 WinRM отвечает -> pc (ставит сторож).
 """
 
+import json
 import logging
 import re
 import socket
@@ -208,6 +209,54 @@ class Infra:
                          ("uptime_h", "REAL"), ("snmp_at", "TEXT")):
             if col not in cols:
                 self.svc.db.execute(f"ALTER TABLE hosts ADD COLUMN {col} {typ}")
+        self.svc.db.execute(
+            """CREATE TABLE IF NOT EXISTS infra_snaps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                host_id INTEGER NOT NULL,
+                snapshot TEXT NOT NULL)""")
+        self.svc.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_snaps_host ON infra_snaps(host_id)")
+
+    # ---------- снапшоты и diff ----------
+
+    def save_snapshot(self, host_id):
+        """Снэпшот SNMP-состояния устройства (для истории изменений)."""
+        row = self.svc.db.execute(
+            "SELECT name, ip, dtype, sys_name, sys_descr, uptime_h FROM hosts "
+            "WHERE id = ?", (host_id,), fetch=True)
+        if not row:
+            return
+        snap = json.dumps(dict(row[0]), ensure_ascii=False,
+                          sort_keys=True).encode("utf-8")
+        self.svc.db.execute(
+            """INSERT INTO infra_snaps (timestamp, host_id, snapshot)
+               VALUES (?,?,?)""",
+            (_now_iso(), host_id, snap.decode("utf-8")))
+
+    def snap_diff(self, host_id, limit=2):
+        """Сравнение двух последних снэпшотов: что изменилось."""
+        rows = self.svc.db.execute(
+            """SELECT timestamp, snapshot FROM infra_snaps
+               WHERE host_id = ? ORDER BY id DESC LIMIT ?""",
+            (host_id, max(2, int(limit))), fetch=True) or []
+        if len(rows) < 2:
+            return {"diff": [], "note": "нужно минимум 2 снэпшота"}
+        new = json.loads(rows[0]["snapshot"])
+        old = json.loads(rows[1]["snapshot"])
+        changes = []
+        for k in sorted(set(new) | set(old)):
+            if new.get(k) != old.get(k):
+                changes.append({"field": k, "old": old.get(k),
+                                "new": new.get(k)})
+        return {"diff": changes,
+                "compared": [rows[1]["timestamp"], rows[0]["timestamp"]]}
+
+    def snapshots_list(self, host_id):
+        return self.svc.db.execute(
+            """SELECT timestamp, snapshot FROM infra_snaps
+               WHERE host_id = ? ORDER BY id DESC LIMIT 50""",
+            (host_id,), fetch=True) or []
 
     # ---------- шлюз ----------
 
@@ -289,6 +338,11 @@ class Infra:
                 dtype = self.classify(ip, snmp, winrm_ok=None)
                 if dtype:
                     upd["dtype"] = dtype
+            if snmp:
+                try:
+                    self.save_snapshot(hid)
+                except Exception as e:
+                    logger.debug("снэпшот %s: %s", ip, e)
             sets = ", ".join(f"{k} = ?" for k in upd)
             self.svc.db.execute(f"UPDATE hosts SET {sets} WHERE id = ?",
                                 (*upd.values(), hid))

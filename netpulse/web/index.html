@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NetPulse</title>
 <link rel="stylesheet" href="/style.css">
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="/manifest.json">
 </head>
 <body>
 
@@ -338,6 +339,10 @@
     <!-- ============ INFRA ============ -->
     <section class="view" id="view-infra">
       <div class="card">
+        <div class="card-title">Топология сети</div>
+        <div id="infra-map" class="result-box" style="min-height:220px;display:flex;justify-content:center"></div>
+      </div>
+      <div class="card">
         <div class="card-title">Сетевая инфраструктура — роутеры, коммутаторы, серверы
           <span class="right">
             <input class="inp" id="infra-community" placeholder="community" style="width:110px" value="public">
@@ -511,5 +516,6 @@
 
 <div id="toast-wrap"></div>
 <script src="/app.js"></script>
+  <script>if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));</script>
 </body>
 </html>

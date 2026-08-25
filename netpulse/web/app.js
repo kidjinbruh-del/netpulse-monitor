@@ -1151,10 +1151,41 @@ const UI = {
     } catch (e) { toast(String(e), true); }
   },
 
+  renderMap(m) {
+    const box = $("infra-map");
+    const W = 700, H = 240, cx = W / 2, cy = H / 2;
+    const gw = m.gateway;
+    const others = m.nodes.filter(n => n.kind !== "router" || n.ip !== gw);
+    const gwNode = gw ? { name: "Шлюз", ip: gw, kind: "router", online: true, karma: 100 } : null;
+    const R = Math.min(W, H) / 2 - 70;
+    const pos = (i, n) => {
+      const a = (Math.PI * 2 * i) / Math.max(n, 1) - Math.PI / 2;
+      return [cx + R * 1.35 * Math.cos(a), cy + R * 0.85 * Math.sin(a)];
+    };
+    let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-height:260px">`;
+    others.forEach((n, i) => {
+      const [x, y] = pos(i, others.length);
+      const col = n.online ? (n.karma >= 80 ? "#22d3a7" : n.karma >= 50 ? "#f5b942" : "#ff5c74") : "#ff5c74";
+      if (gwNode) svg += `<line x1="${cx}" y1="${cy - 40}" x2="${x}" y2="${y}" stroke="#1d2839" stroke-width="1.5"/>`;
+      svg += `<circle cx="${x}" cy="${y}" r="17" fill="#101724" stroke="${col}" stroke-width="2"/>
+              <text x="${x}" y="${y + 34}" fill="#8291a7" font-size="10" text-anchor="middle">${esc(n.name).slice(0, 16)}</text>
+              <text x="${x}" y="${y - 24}" fill="${col}" font-size="10" text-anchor="middle">${n.karma}</text>`;
+    });
+    if (gwNode) svg += `<circle cx="${cx}" cy="${cy - 40}" r="20" fill="#101724" stroke="#4f8cff" stroke-width="2"/>
+        <text x="${cx}" y="${cy - 36}" fill="#4f8cff" font-size="10" text-anchor="middle">GW</text>
+        <text x="${cx}" y="${cy - 6}" fill="#8291a7" font-size="10" text-anchor="middle">${esc(gw)}</text>`;
+    const self = m.nodes.find(n => n.kind === "master");
+    if (self) svg += `<rect x="${cx - 55}" y="${cy + 40}" width="110" height="30" rx="6" fill="#101724" stroke="#22d3a7"/>
+        <text x="${cx}" y="${cy + 59}" fill="#22d3a7" font-size="11" text-anchor="middle">NetPulse (главный)</text>`;
+    svg += "</svg>";
+    box.innerHTML = svg;
+  },
+
   /* ---------- инфраструктура ---------- */
   async loadInfra() {
     try {
-      const d = await apiGet("infra");
+      const [d, m] = await Promise.all([apiGet("infra"), apiGet("map")]);
+      this.renderMap(m);
       $("infra-status").textContent = d.gateway
         ? `Шлюз по умолчанию: ${d.gateway} · community: "${d.community}" · машин: ${d.devices.length}`
         : `Шлюз не определён · машин: ${d.devices.length}`;

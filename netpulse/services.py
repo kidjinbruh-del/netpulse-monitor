@@ -36,6 +36,7 @@ from .backupwatch import BackupWatch
 from .planner import Planner
 from .softwareinv import SoftwareInventory
 from .infra import Infra
+from .healing import Healing
 import logging
 
 logger = logging.getLogger(__name__)
@@ -775,6 +776,7 @@ class MonitorService:
         self.planner = Planner(self)
         self.softwareinv = SoftwareInventory(self)
         self.infra = Infra(self)
+        self.healing = Healing(self)
 
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
@@ -1274,6 +1276,36 @@ class MonitorService:
                 except Exception:
                     pass
             threading.Thread(target=send_hook, daemon=True).start()
+
+        # Email (SMTP, stdlib)
+        em = self.cfg.get("email") or {}
+        if em.get("enabled") and em.get("smtp_host") and em.get("to"):
+            def send_mail():
+                try:
+                    import smtplib
+                    from email.mime.text import MIMEText
+                    from email.header import Header
+                    msg = MIMEText(f"{message}\n\nИсточник: {source}\n"
+                                   f"Время: {_now_iso()}",
+                                   "plain", "utf-8")
+                    msg["Subject"] = Header(
+                        f"[NetPulse] {alert_type}", "utf-8")
+                    msg["From"] = em.get("from") or "netpulse@localhost"
+                    msg["To"] = em["to"]
+                    srv = smtplib.SMTP(em["smtp_host"],
+                                       int(em.get("smtp_port") or 25),
+                                       timeout=10)
+                    try:
+                        if em.get("use_tls"):
+                            srv.starttls()
+                        if em.get("user") and em.get("password"):
+                            srv.login(em["user"], em["password"])
+                        srv.sendmail(msg["From"], [em["to"]], msg.as_string())
+                    finally:
+                        srv.quit()
+                except Exception as e:
+                    logger.warning(f"email: {e}")
+            threading.Thread(target=send_mail, daemon=True).start()
 
     # ---------- сохранение ----------
 

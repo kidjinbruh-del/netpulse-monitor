@@ -76,6 +76,24 @@ DEFAULTS = {
         "enabled": False,
         "url": ""
     },
+    "healing": {
+        "enabled": False,
+        "rules": []
+    },
+    "email": {
+        "enabled": False,
+        "smtp_host": "",
+        "smtp_port": 25,
+        "use_tls": True,
+        "user": "",
+        "password": "",
+        "from": "netpulse@localhost",
+        "to": ""
+    },
+    "healing": {
+        "enabled": False,
+        "rules": []
+    },
     "telegram": {
         "enabled": False,
         "token": "",
@@ -121,6 +139,51 @@ DEFAULTS = {
 }
 
 
+def _validate(cfg):
+    """Мягкая валидация критичных полей: ошибка -> значение из DEFAULTS."""
+    def reset(path):
+        keys = path.split(".")
+        node, src = cfg, DEFAULTS
+        for k in keys[:-1]:
+            node = node.setdefault(k, {})
+            src = src.get(k, {})
+        last = keys[-1]
+        if last in src:
+            node[last] = copy.deepcopy(src[last])
+            print(f"[config] {path}: некорректное значение — использую default")
+
+    def num_ok(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0
+
+    if not num_ok(cfg.get("web_port")) or not (1 <= cfg["web_port"] <= 65535):
+        reset("web_port")
+    if not isinstance(cfg.get("web_host"), str):
+        reset("web_host")
+    numeric = {
+        "watchdog": ("interval_min", "timeout_sec", "disk_free_pct",
+                     "ram_free_mb", "event_hours", "offline_after_polls"),
+        "mtr": ("max_hops", "cycle_sec", "pings_per_hop"),
+        "quota": ("warn_pct",),
+        "lan": ("auto_scan_min",),
+        "ping_interval_sec": (),
+        "db_cleanup_days": (),
+    }
+    for name, keys in numeric.items():
+        if keys:
+            sec = cfg.get(name)
+            if not isinstance(sec, dict):
+                cfg[name] = copy.deepcopy(DEFAULTS.get(name, {}))
+                print(f"[config] {name}: секция восстановлена")
+                continue
+            for k in keys:
+                if not num_ok(sec.get(k)):
+                    reset(f"{name}.{k}")
+        else:
+            if not num_ok(cfg.get(name)):
+                reset(name)
+    return cfg
+
+
 def load_config(path=CONFIG_FILE):
     cfg = copy.deepcopy(DEFAULTS)
     try:
@@ -129,9 +192,10 @@ def load_config(path=CONFIG_FILE):
                 saved = json.load(f)
             _deep_merge(cfg, saved)
     except Exception as e:
-        logger.error(f"[config] ошибка загрузки: {e}")
+        print(f"[config] ошибка загрузки: {e}")
 
     cfg = decrypt_config(cfg)   # dpapi: -> plaintext (в памяти только)
+    cfg = _validate(cfg)
 
     if cfg.get("web_auth_enabled") and not cfg.get("web_token"):
         cfg["web_token"] = uuid.uuid4().hex

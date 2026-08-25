@@ -33,10 +33,15 @@ PS_COLLECT = (
     "-MaxEvents 20 | Select-Object -First 10 "
     "@{n='id';e={$_.Id}},"
     "@{n='text';e={($_.Message -split \"`n\")[0]}};"
+    "$smart=Get-CimInstance -Namespace root\\wmi -ClassName "
+    "MSStorageDriver_FailurePredictStatus -ErrorAction SilentlyContinue | "
+    "Where-Object { $_.PredictFailure } | "
+    "Select-Object -First 3 @{n='drive';e={$_.InstanceName}},"
+    "@{n='reason';e={$_.Reason}};"
     "[pscustomobject]@{host=$env:COMPUTERNAME;os=$o.Caption;"
     "ramFreeMB=[math]::Round($o.FreePhysicalMemory/1KB,0);"
     "upDays=[math]::Round(((Get-Date)-$o.LastBootUpTime).TotalDays,1);"
-    "disks=$d;errors=$e} | ConvertTo-Json -Depth 3 -Compress"
+    "disks=$d;errors=$e;smart=$smart} | ConvertTo-Json -Depth 3 -Compress"
 )
 
 
@@ -138,6 +143,13 @@ class ParkWatchdog:
             found.append(("eventlog", sev,
                           f"Event ID {eid}: {text}",
                           f"{host}:ev:{eid}:{datetime.now():%Y%m%d}", 20))
+
+        for s in (data.get("smart") or []):
+            reason = str(s.get("reason") or "").strip()[:100]
+            found.append(("smart", "CRITICAL",
+                          f"S.M.A.R.T. предсказывает отказ диска "
+                          f"({reason or 'без причины'})",
+                          f"{host}:smart", 24))
 
         for kind, sev, text, key, hours in found:
             inv.note_event(host_id, kind, sev, "watchdog", text,

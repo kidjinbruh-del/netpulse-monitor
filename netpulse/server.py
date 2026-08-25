@@ -1151,6 +1151,62 @@ class Api:
             (limit,), fetch=True) or []
         return {"entries": rows}
 
+    def swagger(self, q):
+        """OpenAPI 3.0 — генерируется из роутов и docstring'ов."""
+        def op(handler):
+            doc = (getattr(Api, handler).__doc__ or handler)
+            return {"summary": doc.strip().split("\n")[0][:120],
+                    "responses": {"200": {"description": "OK"}}}
+        paths = {}
+        for name, handler in ROUTES_GET.items():
+            paths[f"/api/{name}"] = {"get": op(handler)}
+        for name, handler in ROUTES_POST.items():
+            paths[f"/api/{name}"] = {"post": op(handler)}
+        for p in ("/journal.txt", "/journal.csv", "/report.txt",
+                  "/api/stream", "/api/rdp", "/api/gposcript"):
+            paths[p] = {"get": {"summary": "специальный путь (файл/поток)"}}
+        return {"openapi": "3.0.3",
+                "info": {"title": "NetPulse API", "version": __version__},
+                "servers": [{"url": "/"}],
+                "paths": paths}
+
+    def map(self, q):
+        """Данные топологии: главный узел, шлюз, устройства."""
+        devices = self.svc.inventory.list_hosts()
+        gw = self.svc.infra.gateway_ip()
+        try:
+            self_name = socket.gethostname()
+        except Exception:
+            self_name = "self"
+        nodes, seen = [], set()
+        nodes.append({"name": self_name, "ip": "", "kind": "master",
+                      "online": True, "karma": 100})
+        seen.add(self_name.lower())
+        if gw:
+            nodes.append({"name": "шлюз", "ip": gw, "kind": "router",
+                          "online": True, "karma": 100})
+            seen.add(gw)
+        for h in devices:
+            key = (h.get("name") or "").lower()
+            if key in seen or not h.get("ip"):
+                continue
+            kind = h.get("dtype") or ("router" if h.get("ip") == gw else "host")
+            nodes.append({"name": h["name"], "ip": h["ip"], "kind": kind,
+                          "online": bool(h["online"]),
+                          "karma": h.get("health_score", 100)})
+            seen.add(key)
+        return {"nodes": nodes}
+
+    def infra_diff(self, q):
+        try:
+            hid = int(q.get("id", ["0"])[0])
+        except ValueError:
+            return (400, {"error": "нужен числовой id"})
+        return self.svc.infra.snap_diff(hid)
+
+    def healing_status(self, q):
+        return self.svc.healing.status_list()
+
     def selftest(self, q):
         checks = []
 
@@ -1259,6 +1315,8 @@ ROUTES_GET = {
     "gposcript": "gpo_script", "diskforecast": "disk_forecast_ep",
     "selftest": "selftest", "meta": "meta", "whoami": "whoami",
     "infra": "infra_list", "infradtype": "infra_dtype",
+    "infradiff": "infra_diff", "healing": "healing_status",
+    "map": "map", "swagger": "swagger",
 }
 ROUTES_POST = {
     "settings": "settings_post",

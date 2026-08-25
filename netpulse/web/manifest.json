@@ -1,0 +1,12 @@
+{
+  "name": "NetPulse — центр сетевых операций",
+  "short_name": "NetPulse",
+  "description": "Мониторинг сети и автоматизация ИТ-отдела",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090d14",
+  "theme_color": "#090d14",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
