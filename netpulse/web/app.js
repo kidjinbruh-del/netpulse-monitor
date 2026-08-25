@@ -1159,8 +1159,8 @@ const UI = {
     const others = m.nodes.filter(n =>
       !(n.kind === "router" && n.ip === gw) && n.kind !== "master");
     const self = m.nodes.find(n => n.kind === "master");
-    const gwX = 90, gwY = H / 2, cX = W / 2 + 40, cY = H / 2;
-    const Rx = 170, Ry = 72;
+    const gwX = 70, gwY = H / 2, cX = W / 2 - 30, cY = H / 2;
+    const Rx = 150, Ry = 72;
     const pos = (i, n) => {
       const a = (Math.PI * 2 * i) / Math.max(n, 1) - Math.PI / 2;
       return [cX + Rx * Math.cos(a), cY + Ry * Math.sin(a)];
