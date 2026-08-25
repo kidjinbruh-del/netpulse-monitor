@@ -6,6 +6,8 @@ REST + SSE-стрим живого состояния + Prometheus /metrics + au
 
 import hmac
 import json
+import logging
+import logging.handlers
 import socket
 import time
 import uuid
