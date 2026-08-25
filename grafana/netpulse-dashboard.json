@@ -1,0 +1,79 @@
+{
+  "title": "NetPulse — сетевой мониторинг",
+  "uid": "netpulse",
+  "tags": ["netpulse", "network"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Скорость сети (KB/s)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "np_down_speed", "legendFormat": "загрузка" },
+        { "expr": "np_up_speed", "legendFormat": "отдача" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "KBs" }, "overrides": [] }
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Пинг до цели (мс)",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [{ "expr": "np_ping_ms", "legendFormat": "ping" }],
+      "fieldConfig": { "defaults": { "unit": "ms", "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          { "color": "green", "value": null },
+          { "color": "yellow", "value": 100 },
+          { "color": "red", "value": 200 }
+        ] } }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "gauge", "title": "Качество связи",
+      "gridPos": { "x": 0, "y": 8, "w": 6, "h": 7 },
+      "targets": [{ "expr": "np_quality_score", "legendFormat": "score" }],
+      "fieldConfig": { "defaults": {
+        "min": 0, "max": 100,
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "red", "value": null },
+          { "color": "yellow", "value": 50 },
+          { "color": "green", "value": 80 }
+        ] } }, "overrides": [] }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Непрочитанные алерты",
+      "gridPos": { "x": 6, "y": 8, "w": 6, "h": 7 },
+      "targets": [{ "expr": "np_alerts_unread", "legendFormat": "алерты" }],
+      "fieldConfig": { "defaults": {
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null },
+          { "color": "red", "value": 1 }
+        ] } }, "overrides": [] }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Карма машин (health-score)",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 7 },
+      "targets": [{ "expr": "np_host_karma", "legendFormat": "{{host}}" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 100 }, "overrides": [] }
+    },
+    {
+      "id": 6, "type": "stat", "title": "Записей журнала за сутки",
+      "gridPos": { "x": 0, "y": 15, "w": 6, "h": 5 },
+      "targets": [{ "expr": "np_journal_entries_24h" }]
+    },
+    {
+      "id": 7, "type": "stat", "title": "Машин в парке",
+      "gridPos": { "x": 6, "y": 15, "w": 6, "h": 5 },
+      "targets": [{ "expr": "np_hosts_total" }]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Трафик суммарно (MB)",
+      "gridPos": { "x": 12, "y": 15, "w": 12, "h": 5 },
+      "targets": [
+        { "expr": "np_traffic_total_down_mb", "legendFormat": "получено" },
+        { "expr": "np_traffic_total_up_mb", "legendFormat": "отправлено" }
+      ]
+    }
+  ]
+}

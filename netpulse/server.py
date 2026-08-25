@@ -1207,6 +1207,12 @@ class Api:
     def healing_status(self, q):
         return self.svc.healing.status_list()
 
+    def customchecks(self, q):
+        return self.svc.customchecks.results()
+
+    def customchecks_run(self, q):
+        return self.svc.customchecks.run_all(force=True)
+
     def selftest(self, q):
         checks = []
 
@@ -1317,6 +1323,7 @@ ROUTES_GET = {
     "infra": "infra_list", "infradtype": "infra_dtype",
     "infradiff": "infra_diff", "healing": "healing_status",
     "map": "map", "swagger": "swagger",
+    "customchecks": "customchecks",
 }
 ROUTES_POST = {
     "settings": "settings_post",
@@ -1334,7 +1341,7 @@ ROUTES_POST = {
     "plannerdone": "planner_done", "invreport": "inv_report",
     "wol": "wol_wake", "lanalias": "lan_alias",
     "infrascan": "infra_scan", "infradtype": "infra_dtype",
-    "idswl": "ids_wl_add",
+    "idswl": "ids_wl_add", "customchecksrun": "customchecks_run",
 }
 
 
@@ -1639,6 +1646,11 @@ class Handler(BaseHTTPRequestHandler):
                 "# TYPE np_hosts_total gauge",
                 f"np_hosts_total {(hosts_n[0]['n'] if hosts_n else 0) or 0}",
             ]
+            for h in self.api.svc.inventory.list_hosts():
+                hname = (h.get("name") or "?").replace('"', "").replace("\n", "")
+                lines.append(
+                    f'np_host_karma{{host="{hname}"}} '
+                    f'{h.get("health_score", 100)}')
         except Exception:
             pass
         body = "\n".join(lines).encode("utf-8")

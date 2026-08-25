@@ -159,11 +159,26 @@ class ParkWatchdog:
     def _poll_host(self, host, cfg):
         inv = self.svc.inventory
         timeout_sec = int(cfg.get("timeout_sec", 25))
+        if self._is_local(host):
+            try:
+                _, my_ip = self.svc.lan.local_subnet()
+            except Exception:
+                my_ip = "127.0.0.1"
+            ping_ip = my_ip or "127.0.0.1"
+        else:
+            ping_ip = host
         try:
             data = self._collect(host, timeout_sec)
         except Exception as e:
             # WinRM не ответил: различаем «машина выключена» и «жива, но не Windows»
-            ping_ip = "127.0.0.1" if self._is_local(host) else host
+            if self._is_local(host):
+                try:
+                    _, my_ip = self.svc.lan.local_subnet()
+                except Exception:
+                    my_ip = "127.0.0.1"
+                ping_ip = my_ip or "127.0.0.1"
+            else:
+                ping_ip = host
             from netpulse.infra import ping as infra_ping
             ping_ok = infra_ping(ping_ip)
             streak = self._fail_streak.get(host, 0) + 1
@@ -204,7 +219,7 @@ class ParkWatchdog:
             return
 
         hid = inv.upsert_host(data.get("host") or host,
-                              ip=(host if not self._is_local(host) else "127.0.0.1"),
+                              ip=ping_ip,
                               os_info=str(data.get("os") or "")[:120])
         if hid:
             inv.mark_online(hid, True)
@@ -276,6 +291,7 @@ class ParkWatchdog:
             self.svc.db.execute(
                 """DELETE FROM disk_history
                    WHERE timestamp < datetime('now','localtime','-180 days')""")
+            self.svc.customchecks.run_all()
             self.svc.inventory.recompute_health()
         except Exception as e:
             logger.warning("Карма не пересчитана: %s", e)

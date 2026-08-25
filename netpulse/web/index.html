@@ -343,6 +343,15 @@
         <div id="infra-map" class="result-box" style="min-height:220px;display:flex;justify-content:center"></div>
       </div>
       <div class="card">
+        <div class="card-title">Пользовательские проверки <span class="hint">custom_checks/*.py</span>
+          <button class="mini-btn right" onclick="UI.loadCustomChecks()"><svg class="ic sm"><use href="#i-refresh"/></svg></button>
+        </div>
+        <div id="cc-status" class="result-box muted">—</div>
+        <table class="tbl" id="cc-table">
+          <thead><tr><th>Проверка</th><th>Статус</th><th>Время</th><th>Результат</th></tr></thead>
+          <tbody></tbody></table>
+      </div>
+      <div class="card">
         <div class="card-title">Сетевая инфраструктура — роутеры, коммутаторы, серверы
           <span class="right">
             <input class="inp" id="infra-community" placeholder="community" style="width:110px" value="public">

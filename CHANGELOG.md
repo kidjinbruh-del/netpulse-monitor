@@ -2,6 +2,26 @@
 
 Формат: Keep a Changelog. Версии семантические.
 
+## [1.9.0] — 2026-08-25
+
+### Added
+- Пользовательские проверки: python-файлы в `custom_checks/*.py`
+  (контракт `run() -> {ok, text}`), запуск в цикле сторожа, вкладка результатов
+- Grafana-дашборд `grafana/netpulse-dashboard.json` (8 панелей на `/metrics`)
+- Per-host метрика `np_host_karma` в Prometheus
+- SVG-топология сети во вкладке «Инфраструктура» (шлюз, главный узел, устройства)
+- Self-Healing: правила «событие → runbook» с rate-limit и аудитом
+- SMART-мониторинг дисков через WMI (CRITICAL при PredictFailure)
+- SNMP-снэпшоты + diff конфигурации устройств (`/api/infradiff`)
+- Email-алерты (SMTP, stdlib)
+- OpenAPI 3.0: `/api/swagger`
+- Валидация config.json при загрузке (некорректные значения → default)
+- PWA: manifest + service worker (установка на телефон, офлайн-статика)
+
+### Fixed
+- Дубль узла «шлюз/роутер» на топологии; наезд подписей на плашку NetPulse
+- Свой хост получает LAN IP вместо 127.0.0.1
+
 ## [1.7.0] — 2026-08-25
 
 ### Added
@@ -11,6 +31,9 @@
 - Ротируемое логирование `logs/netpulse.log` вместо print
 - Webhook-канал алертов (Slack/Discord/Mattermost/Teams) — поля в настройках
 - `ROADMAP.md` — отложенные предложения с вердиктами
+- Идентификация админов `web_admins`, `/api/whoami`, бессрочная сессия
+- Брутфорс-защита токена, security-заголовки, анти-CSRF
+- Отчёты `/journal.txt`, `/journal.csv`, `/report.txt` под авторизацией
 
 ### Changed
 - `apply_settings` отказоустойчив: сбой подсистемы не ломает сохранение

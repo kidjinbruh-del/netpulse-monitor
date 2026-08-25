@@ -37,6 +37,7 @@ from .planner import Planner
 from .softwareinv import SoftwareInventory
 from .infra import Infra
 from .healing import Healing
+from .customchecks import CustomChecks
 import logging
 
 logger = logging.getLogger(__name__)
@@ -777,6 +778,7 @@ class MonitorService:
         self.softwareinv = SoftwareInventory(self)
         self.infra = Infra(self)
         self.healing = Healing(self)
+        self.customchecks = CustomChecks(self)
 
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
