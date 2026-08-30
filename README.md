@@ -1,6 +1,6 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-1.6.0-blue)
+![Version](https://img.shields.io/badge/version-1.9.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
 ![Tests](https://img.shields.io/badge/tests-28%2F28-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
