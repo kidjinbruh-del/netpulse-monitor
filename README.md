@@ -1,10 +1,15 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-1.9.0-blue)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
 ![Tests](https://img.shields.io/badge/tests-28%2F28-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+
+<p align="center">
+  <img src="docs/screens/dashboard.png" alt="Дашборд" width="45%">
+  <img src="docs/screens/sysadmin.png" alt="Вкладка «Сисадмин»" width="45%">
+</p>
 
 Локальный центр сетевых операций (NOC) и платформа автоматизации ИТ-отдела.
 Один экземпляр разворачивается на машине администратора или внутреннем сервере;
@@ -22,8 +27,12 @@
 | Качество связи | Пинг, джиттер, потери → интегральная оценка 0–100 |
 | Обнаружение устройств | Автоскан подсети (ping + ARP + reverse DNS), MAC и вендор, алерт о новом устройстве |
 | Инфраструктура | Роутеры, коммутаторы, серверы: тип устройства, **SNMP v2c** (sysName, sysDescr, uptime), веб-интерфейс устройства в один клик |
-| Диагностика | Ping-проба, traceroute, живой MTR, подбор DNS, speedtest |
+| L2-карта | MAC → порт коммутатора (Bridge-MIB, SNMP-walk), соседи по LLDP, PTR-резолв имён |
+| Диагностика | Ping-проба, traceroute, живой MTR, подбор DNS, speedtest; MTR-«веер» по расписанию с историей маршрутов |
 | Прогноз дисков | Тренд заполнения по истории замеров: «хватит на N дней» |
+| Прогноз ОЗУ | Наклон роста памяти мастера → прогноз до заполнения (`/api/ramforecast`) |
+| SLA | Доступность каждого узла за период («SLA, %», события OFFLINE/ONLINE) |
+| CVE-проверка | Инвентарь ПО сверяется с NVD API (кэш `sw_cve`, без ключа, rate-limited) |
 
 ### Платформа ИТ-отдела
 | Функция | Описание |
@@ -44,14 +53,24 @@
 | Firewall | Блокировка IP и приложений через Windows Firewall из дашборда |
 | Аутентификация | Токены, брутфорс-защита (5 промахов → блок IP на 10 мин), бессрочная сессия админа, идентификация (`web_admins`) |
 | Шифрование | Секреты конфига под Windows DPAPI; HTTPS (самоподписанный сертификат) |
+| Гео-карта атак | Агрегация источников инцидентов по странам (локальная таблица, без внешних API) |
+| Пороговые профили | Отдельные лимиты для серверов/роутеров/ПК по группам устройств (`quality.profiles`) |
+| Whitelist MAC | Доверенные MAC не поднимают алерт нового устройства |
 | Аудит | Все мутации через API — в append-only `audit_log` (кто, IP, действие, статус); секреты маскируются |
 | Отказоустойчивость | Бэкап config.json перед каждым изменением (`backups/config/`, последние 10); ротация логов `logs/netpulse.log` |
-| Каналы алертов | Telegram + generic Webhook (Slack/Discord/Mattermost/Teams) |
+| Каналы алертов | Telegram + generic Webhook (Slack/Discord/Mattermost/Teams); эскалация не-подтверждённых алертов |
+| RBAC | Роли `admin`/`viewer` (`web_users`): viewer не может мутировать состояние через API |
 
 ### Системные
 Prometheus `/metrics` • SSE-стрим живого состояния • автобэкап (WinRAR/zip) •
-самодиагностика `/api/selftest` • карта проекта `/api/meta` • Wake-on-LAN •
-RDP-переходы • тесты без внешних зависимостей.
+самодиагностика `/api/selftest` • Wake-on-LAN • RDP-переходы • тесты без
+внешних зависимостей.
+
+Еженедельный авто-отчёт (email/Telegram/webhook) • конфиг секретами через
+`.env`/переменные окружения (`NETPULSE_*`) • печать топологии на A4 •
+интеграция с Proxmox VE (статус нод/ВМ).
+
+Идеи для развития — см. [IDEAS.md](IDEAS.md).
 
 ---
 
@@ -78,8 +97,7 @@ RDP-переходы • тесты без внешних зависимосте
 ```
 
 Модули изолированы: каждый владеет своими таблицами БД, фоновые циклы
-останавливаются через общий event. Полная карта для ИИ-ассистентов —
-[`AGENTS.md`](AGENTS.md), живые данные — `/api/meta`.
+останавливаются через общий event.
 
 ---
 
@@ -132,10 +150,20 @@ schtasks /Create /TN "NetPulse" /SC ONLOGON /RL HIGHEST /F /TR ^
 | `backupwatch` | Ресурсы для контроля свежести бэкапов |
 | `planner` | Плановые работы: `tasks: [{"name": "...", "every_days": 14}]` |
 | `speedtest` | URL и объёмы тестов скорости |
-| `mtr` | Цель, макс. хопов, интервал цикла |
+| `mtr` | Цель, макс. хопов, интервал цикла; `targets` — веер целей, `rotate_sec` — ротация |
 | `telegram` | Уведомления в Telegram (токен шифруется DPAPI) |
 | `backup` | Автобэкап проекта (WinRAR или zip) |
 | `diagnostics` | Цели traceroute и резолвинга |
+| `lan.trusted_macs` | Список доверенных MAC — не поднимают алерт нового устройства |
+| `quality.profiles` | Пороговые профили: `server`/`router`/`pc` — лимиты по группам устройств |
+| `web_users` | Роли: `[{"name": "...", "token": "...", "role": "viewer"}]` — viewer без прав на изменения |
+| `escalate` | Эскалация: `enabled`, `unack_min`, `hook_url` (повтор не-принятых алертов) |
+| `report.weekly` | Еженедельный отчёт: `enabled`, `day`, `time`, `to_email` |
+| `proxmox` | PVE: `enabled`, `host`, `token_id`, `token_secret` |
+| `geo` / `cve` | Селеция гео-агрегации и CVE-проверки: `enabled`, `nvd_key` |
+
+Секреты можно задавать через переменные окружения `NETPULSE_*` или файл `.env`
+в корне проекта — значения подставляются поверх `config.json` без правки файла.
 
 ---
 
@@ -149,7 +177,8 @@ schtasks /Create /TN "NetPulse" /SC ONLOGON /RL HIGHEST /F /TR ^
 | **Соединения** | Все соединения и интерфейсы с привязкой к процессам |
 | **Диагностика** | Ping-проба, traceroute, живой MTR, DNS, speedtest |
 | **Локальная сеть** | Автоскан подсети, MAC/вендор, редактируемые алиасы устройств |
-| **Инфраструктура** | Роутеры/коммутаторы/серверы: SNMP-информация, типы, веб-интерфейсы устройств |
+| **Инфраструктура** | Роутеры/коммутаторы/серверы: SNMP-информация, типы, веб-интерфейсы устройств, топология SVG |
+| **Сисадмин** | SLA-доступность, прогноз ОЗУ, L2-порты, гео-карта атак, Proxmox, MTR-история, CVE, лента audit |
 | **Парк ПК** | Карточки машин, карма, события, прогноз дисков, RDP/WoL/Ping, runbooks |
 | **Захват пакетов** | Raw-socket перехват (требует прав администратора) |
 | **Безопасность** | Сканер системы, IDS-лента, сканер портов хоста, правила firewall |
@@ -177,6 +206,13 @@ schtasks /Create /TN "NetPulse" /SC ONLOGON /RL HIGHEST /F /TR ^
 | `/api/journal?limit=` · `/api/journalreport?days=` | Журнал и отчёт |
 | `/api/planner` · `/api/softsearch?q=` · `/api/diskforecast` | Планы, софт, прогноз дисков |
 | `/api/infra` | Инфраструктура (SNMP-данные, типы, шлюз) |
+| `/api/l2map` · `/api/ptrs` | L2-карта (MAC→порт, LLDP) и PTR-резолв |
+| `/api/sla?days=30` | SLA-доступность узлов |
+| `/api/geomap?limit=` | Гео-агрегация источников атак |
+| `/api/ramforecast` | Прогноз заполнения ОЗУ |
+| `/api/mtrhistory?hours=24` | История MTR-циклов |
+| `/api/cvestatus` · `/api/proxmox` | Статус CVE-кэша и нод Proxmox |
+| `/api/reportpdf` | Текст еженедельного отчёта |
 | `/api/runbooks` · `/api/backupstatus` · `/api/alerts` | Кнопки, бэкапы, алерты |
 | `/api/ping?target=` · `/api/trace?target=` · `/api/dnsbest` | Диагностика |
 | `/api/ai` · `/api/securityresult?job=` | AI и сканы безопасности |
@@ -193,7 +229,9 @@ schtasks /Create /TN "NetPulse" /SC ONLOGON /RL HIGHEST /F /TR ^
 | `/api/runbookexec` | Выполнить runbook `{name, params}` |
 | `/api/watchdogpoll` · `/api/healthrecompute` | Внеплановый обход парка, пересчёт кармы |
 | `/api/infrascan` · `/api/infradtype` | Опрос инфраструктуры, тип устройства |
-| `/api/lanscan` · `/api/lanalias` | Скан подсети, алиас устройства |
+| `/api/l2scan` · `/api/lanalias` | Опрос L2-карты, алиас устройства |
+| `/api/cvescan` · `/api/proxmoxpoll` | CVE-проверка ПО, опрос Proxmox |
+| `/api/lanscan` | Скан подсети |
 | `/api/wol` | Wake-on-LAN |
 | `/api/idswl` | Правило whitelist IDS |
 | `/api/fwblockip` · `/api/fwblockapp` · `/api/fwunblock` | Firewall |
@@ -236,18 +274,22 @@ python -m tests.test_netpulse    # веб: сервер, auth, модули пл
 ```
 netpulse/            веб-версия (основная)
   server.py            HTTP-сервер, REST/SSE/Prometheus, firewall, бэкапы
-  services.py          MonitorService: трафик, пинг, IDS, MTR, сканер ЛС
+  services.py          MonitorService: трафик, пинг, IDS, MTR, сканер ЛС, SLA, гео, отчёты
+  l2map.py             L2-карта: Bridge-MIB (SNMP-walk), LLDP, PTR
+  geo.py               локальный резолвер IP → страна
+  cve.py               CVE-проверка через NVD API (кэш sw_cve)
+  proxmox.py           интеграция Proxmox VE (статус нод/ВМ)
   journal.py           журнал работ и отчёты
   inventory.py         парк машин, события, карма
   watchdog.py          сторож ПК (WinRM), прогноз дисков
-  infra.py             инфраструктура: SNMP v2c (stdlib), классификация
+  infra.py             инфраструктура: SNMP v2c (stdlib), авто-diff конфигов
   runbooks.py          кнопки операций + аудит
   planner.py           плановые работы
   backupwatch.py       контроль бэкапов
   softwareinv.py       приём GPO-отчётов о ПО
   wol.py               Wake-on-LAN
-  config.py            конфигурация (глубокое слияние, DPAPI)
-  web/                 дашборд (index.html, app.js, style.css)
+  config.py            конфигурация (глубокое слияние, DPAPI, NETPULSE_* env)
+  web/                 дашборд (index.html, app.js, style.css, sw.js)
   gpo/                 скрипт инвентаря для GPO
   runbooks/            JSON-сценарии кнопок
 core/                общее ядро: БД (WAL), пингер, сниффер, traceroute, security
@@ -255,8 +297,9 @@ ai/                  агенты аномалий и прогнозов
 ui/                  desktop-интерфейс (legacy)
 tools/               make_cert.ps1, mitm-шаблон для отладки
 tests/               тесты (28)
+docs/screens/        скриншоты дашборда
 _legacy/             архив первой версии
-AGENTS.md            карта проекта для ИИ-ассистентов
+IDEAS.md             бэклог идей сисадмина
 ```
 
 ---

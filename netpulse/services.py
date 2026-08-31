@@ -38,6 +38,10 @@ from .softwareinv import SoftwareInventory
 from .infra import Infra
 from .healing import Healing
 from .customchecks import CustomChecks
+from .l2map import L2Map
+from .geo import country as geo_country, top_countries, flag as geo_flag
+from .cve import CVEChecker
+from .proxmox import ProxmoxClient
 import logging
 
 logger = logging.getLogger(__name__)
@@ -345,6 +349,44 @@ class MTREngine:
             return {"running": self.running, "target": self.target,
                     "cycles": self.cycles_done, "hops": out}
 
+    def save_snapshot(self):
+        """Сохраняет последний цикл MTR в БД (история задержек)."""
+        st = self.stats()
+        if not st["hops"] or not self.svc:
+            return
+        try:
+            self.svc.db.execute(
+                """CREATE TABLE IF NOT EXISTS mtr_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL, target TEXT NOT NULL,
+                    hop INTEGER, ip TEXT, loss_pct REAL, avg_ms REAL)""")
+            now = datetime.now().isoformat()
+            self.svc.db.execute_many(
+                "INSERT INTO mtr_history (ts, target, hop, ip, loss_pct, avg_ms) "
+                "VALUES (?,?,?,?,?,?)",
+                [(now, st["target"], h["hop"], h["ip"], h["loss_pct"], h["avg_ms"])
+                 for h in st["hops"]])
+        except Exception as e:
+            logger.debug("mtr snapshot: %s", e)
+
+    def schedule_loop(self):
+        """Веер целей: цикл по targets с ротацией каждые rotate_sec."""
+        mcfg = self.svc.cfg.get("mtr", {}) or {}
+        targets = list(mcfg.get("targets") or []) or [mcfg.get("target", "8.8.8.8")]
+        rotate = int(mcfg.get("rotate_sec", 600) or 600)
+        idx = 0
+        while self.running and not self.svc._stop_event.is_set():
+            tgt = targets[idx % len(targets)]
+            self.start(target=tgt)
+            waited = 0
+            while self.running and waited < rotate:
+                if self.svc._stop_event.wait(10):
+                    return
+                waited += 10
+                if waited % 120 == 0:
+                    self.save_snapshot()
+            idx += 1
+
 
 def _ms_times(output):
     import re as _re
@@ -496,7 +538,9 @@ class LANNetworkScanner:
                              ip=excluded.ip, hostname=excluded.hostname,
                              last_seen=excluded.last_seen""",
                         (mac, ip, hostname, vendor, _now_iso(), _now_iso()))
-                    if is_new:
+                    trusted = (self.svc.cfg.get("lan", {}) or {}).get(
+                        "trusted_macs") or []
+                    if is_new and mac not in {str(t).lower() for t in trusted}:
                         self.svc.push_alert(
                             "LAN_NEW_DEVICE",
                             f"Новое устройство в сети: {ip} ({mac}) {vendor}".strip(),
@@ -779,6 +823,9 @@ class MonitorService:
         self.infra = Infra(self)
         self.healing = Healing(self)
         self.customchecks = CustomChecks(self)
+        self.l2map = L2Map(self)
+        self.cve = CVEChecker(self)
+        self.proxmox = ProxmoxClient(self)
 
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
@@ -786,6 +833,7 @@ class MonitorService:
 
         self._psutil_last = None
         self.history = deque(maxlen=1800)
+        self._ram_hist = deque(maxlen=120)
         self.live_alerts = deque(maxlen=60)
         self._alert_rl = {}
         self._cached_state_json = "{}"
@@ -871,6 +919,36 @@ class MonitorService:
         if auto_min > 0:
             t = threading.Thread(target=self.lan.auto_loop, args=(auto_min,),
                                  daemon=True, name="np-lanscan")
+            t.start()
+            self._threads.append(t)
+
+            # L2-карта: редкий опрос портов коммутаторов после автоскана
+            t = threading.Thread(target=self._l2_auto_loop, daemon=True,
+                                 name="np-l2map")
+            t.start()
+            self._threads.append(t)
+
+        if self.cfg.get("report", {}).get("weekly", {}).get("enabled"):
+            t = threading.Thread(target=self._weekly_report_loop, daemon=True,
+                                 name="np-weekly")
+            t.start()
+            self._threads.append(t)
+
+        if self.cfg.get("escalate", {}).get("enabled"):
+            t = threading.Thread(target=self._escalate_loop, daemon=True,
+                                 name="np-escalate")
+            t.start()
+            self._threads.append(t)
+
+        if (self.cfg.get("mtr") or {}).get("targets"):
+            t = threading.Thread(target=self.mtr.schedule_loop, daemon=True,
+                                 name="np-mtrfan")
+            t.start()
+            self._threads.append(t)
+
+        if (self.cfg.get("proxmox") or {}).get("enabled"):
+            t = threading.Thread(target=self.proxmox.loop, daemon=True,
+                                 name="np-proxmox")
             t.start()
             self._threads.append(t)
 
@@ -976,6 +1054,8 @@ class MonitorService:
                         "mem_used_gb": round((vm.total - vm.available) / 1073741824, 2),
                         "mem_total_gb": round(vm.total / 1073741824, 2),
                     }
+                    if hasattr(self, "_ram_hist"):
+                        self._ram_hist.append((self._tick, round(vm.percent, 1)))
 
                 if self.cfg.get("ai", {}).get("enabled", True):
                     result = self.ai.process_traffic_data({
@@ -1311,6 +1391,19 @@ class MonitorService:
 
     # ---------- сохранение ----------
 
+    def profile_thresholds(self, dtype=None):
+        """Пороговые профили по группам устройств (quality.profiles)."""
+        profiles = (self.cfg.get("quality") or {}).get("profiles") or {}
+        key = dtype or "default"
+        p = profiles.get(key) or profiles.get("default") or {}
+        if not p:
+            return None
+        return {
+            "ping_high": p.get("warn_ping_ms", 120) * 1.25,
+            "jitter_high": p.get("max_jitter_ms", 15),
+            "loss_high": p.get("max_loss_pct", 2),
+        }
+
     def _alert_thresholds(self):
         q = self.cfg.get("quality", {})
         return {
@@ -1386,6 +1479,211 @@ class MonitorService:
         except Exception as e:
             logger.warning(f"apply_settings: AI не обновлён: {e}")
         return True
+
+    # ---------- новый функционал: SLA, гео, RAM-прогноз, MTR-веер ----------
+
+    def mtr_history(self, hours=24):
+        hours = min(max(int(hours), 1), 168)
+        try:
+            self.db.execute(
+                """CREATE TABLE IF NOT EXISTS mtr_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL, target TEXT NOT NULL,
+                    hop INTEGER, ip TEXT, loss_pct REAL, avg_ms REAL)""")
+        except Exception as e:
+            logger.debug("mtr_history table: %s", e)
+        return self.db.execute(
+            """SELECT ts, target, hop, ip, loss_pct, avg_ms FROM mtr_history
+               WHERE ts > datetime('now','localtime', ? || ' hours')
+               ORDER BY id ASC""", (f"-{hours}",), fetch=True) or []
+
+    def sla_period(self, days=30):
+        """SLA-доступность узлов за период по hosts + WATCH_OFFLINE событиям."""
+        days = min(max(int(days), 1), 90)
+        since = f"-{days} days"
+        hosts = self.db.execute(
+            """SELECT h.id, h.name, h.ip, h.online, h.first_seen, h.last_seen
+               FROM hosts h""", fetch=True) or []
+        out = []
+        for h in hosts:
+            offs = self.db.execute(
+                """SELECT COUNT(*) AS n FROM events
+                   WHERE host_id = ? AND kind IN ('OFFLINE','WATCH_OFFLINE')
+                     AND timestamp > datetime('now','localtime', ?)""",
+                (h["id"], since), fetch=True) or [{}]
+            ons = self.db.execute(
+                """SELECT COUNT(*) AS n FROM events
+                   WHERE host_id = ? AND kind = 'ONLINE'
+                     AND timestamp > datetime('now','localtime', ?)""",
+                (h["id"], since), fetch=True) or [{}]
+            n_off = (offs[0]["n"] if offs else 0) or 0
+            n_on = (ons[0]["n"] if ons else 0) or 0
+            # грубая оценка: downtime = события OFFLINE без подтверждения ONLINE
+            est = 100.0 - min(100.0, n_off * 5 if n_off else 0)
+            out.append({
+                "id": h["id"], "name": h["name"], "ip": h["ip"],
+                "online": bool(h["online"]),
+                "offline_events": n_off, "online_events": n_on,
+                "sla_pct": round(max(0.0, est), 2),
+                "first_seen": h["first_seen"], "last_seen": h["last_seen"],
+            })
+        return sorted(out, key=lambda x: x["sla_pct"])
+
+    def geo_attack_map(self, limit=150):
+        """Гео-карта атак: агрегация источников из IDS/security-алертов."""
+        ips = []
+        for ev in list(getattr(self.procmon, "ids_events", []))[:limit]:
+            msg = str(ev.get("message", ""))
+            for m in re.finditer(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", msg):
+                ips.append(m.group(1))
+        for ev in list(getattr(self.procmon, "security_events", []))[:limit]:
+            msg = str(ev.get("message", ""))
+            for m in re.finditer(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", msg):
+                ips.append(m.group(1))
+        # отдельно публичные IP из алертов за период
+        rows = self.db.execute(
+            """SELECT message FROM alerts
+               WHERE alert_type IN ('SUSPICIOUS_CONN','PORT_SCAN','SECURITY_SCAN')
+               ORDER BY id DESC LIMIT 300""", fetch=True) or []
+        for r in rows:
+            for m in re.finditer(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", r["message"]):
+                ips.append(m.group(1))
+        return {"countries": top_countries(ips),
+                "total_ips": len(ips), "uniq": len(set(ips))}
+
+    def ram_forecast(self, days_left_cap=30):
+        """Прогноз заполнения ОЗУ мастера по истории mem_pct из snapshot'ов."""
+        history = self._ram_history()
+        if len(history) < 3:
+            return {"ok": False, "note": "мало данных (нужно 3+ точек)"}
+        pts = list(history)
+        slope = (pts[-1][1] - pts[0][1]) / max(len(pts) - 1, 1)
+        if slope <= 0:
+            return {"ok": True, "slope_pct_pt": round(slope, 3),
+                    "days_left": None, "note": "ОЗУ не растёт"}
+        days_left = (100.0 - pts[-1][1]) / slope
+        return {"ok": True, "last_pct": pts[-1][1], "slope_pct_pt": round(slope, 3),
+                "days_left": int(days_left) if days_left < days_left_cap else None}
+
+    def _ram_history(self):
+        # из кольцевого буфера mem_pct (пишется раз в секунду в _tick_loop)
+        return list(getattr(self, "_ram_hist", None) or [])[-120:]
+
+    def _l2_auto_loop(self):
+        while not self._stop_event.is_set():
+            try:
+                self.l2map.scan()
+            except Exception as e:
+                logger.info(f"[l2] {e}")
+            self._stop_event.wait(1800)
+
+    def _escalate_loop(self):
+        esc = self.cfg.get("escalate", {})
+        timeout_min = int(esc.get("unack_min", 30) or 30)
+        notified = set()
+        while not self._stop_event.is_set():
+            try:
+                rows = self.db.execute(
+                    """SELECT id, alert_type, message, source, timestamp FROM alerts
+                       WHERE acknowledged = 0
+                         AND timestamp <= datetime('now','localtime', ? || ' minutes')""",
+                    (f"-{timeout_min}",), fetch=True) or []
+                for r in rows:
+                    if r["id"] in notified:
+                        continue
+                    notified.add(r["id"])
+                    self.notify_external(
+                        f"ЭСКАЛАЦИЯ: {r['alert_type']}",
+                        f"{r['message']} (с {r['timestamp']})")
+            except Exception as e:
+                logger.info(f"[escalate] {e}")
+            self._stop_event.wait(600)
+
+    def _weekly_report_loop(self):
+        while not self._stop_event.is_set():
+            # авто-отчёт раз в неделю по расписанию
+            try:
+                from datetime import timedelta
+                now = datetime.now()
+                wr = self.cfg.get("report", {}).get("weekly", {}) or {}
+                day = (str(wr.get("day", "mon")).lower()[:3])
+                clock = str(wr.get("time", "08:00")).strip()
+                if now.strftime("%a").lower().startswith(day) and \
+                        now.strftime("%H:%M") == clock:
+                    text = self._weekly_report_text()
+                    em = self.cfg.get("email", {}) or {}
+                    to = wr.get("to_email") or em.get("to") or ""
+                    if em.get("enabled") and to:
+                        self._send_report_email(to, text)
+                    wh = self.cfg.get("webhook", {}) or {}
+                    if wh.get("enabled") and wh.get("url"):
+                        self._send_report_webhook(wh.get("url"), text)
+                    self._stop_event.wait(86400)
+            except Exception as e:
+                logger.info(f"[weekly] {e}")
+            self._stop_event.wait(60)
+
+    def _weekly_report_text(self):
+        lines = ["NETPULSE — еженедельный отчёт", datetime.now().isoformat(), ""]
+        hosts = self.db.execute(
+            "SELECT name, ip, online, health_score FROM hosts", fetch=True) or []
+        lines.append(f"Машин: {len(hosts)}, онлайн: "
+                     f"{sum(1 for h in hosts if h['online'])}")
+        lines.append("")
+        if hosts:
+            lines.append("По карме (худшие):")
+            for h in sorted(hosts, key=lambda x: x["health_score"] or 100)[:5]:
+                lines.append(
+                    f"  {h['name']} [{h['ip']}] карма {h['health_score']} "
+                    f"{'онлайн' if h['online'] else 'ОФФЛАЙН'}")
+        lines.append("")
+        alerts = self.db.execute(
+            "SELECT alert_type, COUNT(*) AS n FROM alerts "
+            "WHERE timestamp > datetime('now','localtime','-7 days') "
+            "GROUP BY alert_type ORDER BY n DESC LIMIT 10", fetch=True) or []
+        if alerts:
+            lines.append("Алерты за неделю:")
+            for a in alerts:
+                lines.append(f"  {a['alert_type']}: {a['n']}")
+        return "\n".join(lines)
+
+    def _send_report_email(self, to, text):
+        import smtplib
+        from email.mime.text import MIMEText
+        em = self.cfg.get("email", {})
+        try:
+            msg = MIMEText(text, "plain", "utf-8")
+            msg["Subject"] = "NetPulse — еженедельный отчёт"
+            msg["From"] = em.get("from") or "netpulse@localhost"
+            msg["To"] = to
+            srv = smtplib.SMTP(em["smtp_host"], int(em.get("smtp_port") or 25),
+                               timeout=10)
+            try:
+                if em.get("use_tls"):
+                    srv.starttls()
+                if em.get("user") and em.get("password"):
+                    srv.login(em["user"], em["password"])
+                srv.sendmail(msg["From"], [to], msg.as_string())
+            finally:
+                srv.quit()
+        except Exception as e:
+            logger.warning(f"week-report email: {e}")
+
+    def _send_report_webhook(self, url, text):
+        def send():
+            try:
+                from urllib.request import Request, urlopen
+                req = Request(url, data=json.dumps(
+                    {"type": "WEEKLY_REPORT", "text": text},
+                    ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json; charset=utf-8"})
+                urlopen(req, timeout=6)
+            except Exception:
+                pass
+        threading.Thread(target=send, daemon=True).start()
+
+    def weekly_report_text_ep(self):
+        return {"report": self._weekly_report_text()}
 
 
 def json_dumps(obj):

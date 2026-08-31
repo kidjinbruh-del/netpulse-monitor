@@ -1,5 +1,6 @@
-/* NetPulse Service Worker: офлайн-кэш статики, API всегда из сети */
-const CACHE = "netpulse-v1";
+/* NetPulse Service Worker: офлайн-кэш статики, API всегда из сети.
+   Стратегия network-first: свежие файлы с сервера, кэш = только офлайн-фолбек. */
+const CACHE = "netpulse-v2";
 const STATIC = ["/", "/style.css", "/app.js", "/icon.svg", "/manifest.json"];
 
 self.addEventListener("install", (e) => {
@@ -17,11 +18,11 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
   e.respondWith(
-    caches.match(e.request).then((hit) =>
-      hit || fetch(e.request).then((r) => {
-        const copy = r.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
-        return r;
-      }).catch(() => caches.match("/")))
+    fetch(e.request).then((r) => {
+      const copy = r.clone();
+      caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+      return r;
+    }).catch(() => caches.match(e.request).then((hit) =>
+      hit || caches.match("/")))
   );
 });

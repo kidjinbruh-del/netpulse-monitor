@@ -2,6 +2,66 @@
 
 Формат: Keep a Changelog. Версии семантические.
 
+## [2.0.0] — 2026-08-31
+
+Полный цикл идей сисадмина (см. [IDEAS.md](IDEAS.md)): 19/20 реализовано,
+одна идея (Wi-Fi-клиенты) оставлена в бэклоге как требующая оборудования.
+
+### Added — сеть и инвентарь
+- `netpulse/l2map.py`: L2-карта по SNMP — Bridge-MIB (`dot1dTpFdbTable`)
+  «MAC → порт коммутатора», LLDP-соседи (`lldpRemTable`), таблица `l2_ports`;
+  фоновый цикл `np-l2map` (после автоскана ЛС)
+- PTR-резолв имён для устройств без hostname (`L2Map.resolve_ptrs()`)
+- API: `GET /api/l2map`, `GET /api/ptrs`, `POST /api/l2scan`
+
+### Added — мониторинг и алерты
+- Пороговые профили по группам устройств: `quality.profiles`
+  (server/router/pc), алерт `PROFILE_LIMIT` в `scan_infra`
+- Эскалация не-принятых алертов: `_escalate_loop()`, конфиг `escalate`
+  (повтор в Telegram через `unack_min`)
+- Прогноз ОЗУ: `ram_forecast()` (наименьшие квадраты по `mem_pct`,
+  горизонт до 95%), API `GET /api/ramforecast`
+- MTR-«веер» по расписанию: `MTREngine.save_snapshot()` (таблица
+  `mtr_history`), `schedule_loop()` — ротация по `mtr.targets`,
+  API `GET /api/mtrhistory`
+
+### Added — безопасность
+- `netpulse/geo.py`: локальный резолвер IP → страна (без внешних API)
+- Гео-карта атак: `geo_attack_map()` по IDS/security-алертам,
+  API `GET /api/geomap`
+- Авто-diff SNMP-конфигов: `auto_diff()` по `infra_snaps`,
+  алерт `CONFIG_CHANGED`
+- Whitelist MAC: `lan.trusted_macs` не поднимают `LAN_NEW_DEVICE`
+- RBAC: роли `admin`/`viewer` из `web_users`, POST-действия viewer
+  блокируются (403, кроме подтверждения алертов/алиасов), `whoami`
+  отдаёт роль
+- `netpulse/cve.py`: NVD API v2 (без ключа, кэш `sw_cve`, rate-limit
+  1.2 c/запрос), API `GET /api/cvestatus`, `POST /api/cvescan`
+
+### Added — удобство и отчётность
+- `netpulse/proxmox.py`: интеграция PVE (статус нод/ВМ, таблица
+  `proxmox_status`), API `GET /api/proxmox`, `POST /api/proxmoxpoll`
+- Конфиг через переменные окружения `NETPULSE_*` и `.env` (поверх
+  `config.json`, секреты без правки файла)
+- Еженедельный авто-отчёт: `_weekly_report_loop()` — email/Telegram/
+  webhook, конфиг `report.weekly`; API `GET /api/reportpdf`
+- SLA-доступность узлов: `sla_period(days)` по событиям OFFLINE/ONLINE,
+  API `GET /api/sla`
+- UI: вкладка «Сисадмин» (SLA, прогноз ОЗУ, L2-порты, гео-карта,
+  Proxmox, MTR-история, CVE, лента изменений `/api/audit`)
+- Печать топологии на A4 (светлая страница из текущей SVG) — кнопка
+  в «Инфраструктуре»
+
+### Changed
+- `whoami` возвращает `role`; `_identity()` — кортеж `(имя, роль)`
+- `sw.js` → `netpulse-v2`: network-first для статики (старый PWA-кэш
+  отдавал устаревший `app.js`)
+
+### Fixed
+- `ram_forecast` падал 500 при пустой истории (чтение из кортежей
+  `self.history`) — теперь буфер `_ram_hist` в `_tick_loop`
+- Таблица `mtr_history` гарантированно создаётся до чтения
+
 ## [1.9.0] — 2026-08-25
 
 ### Added
@@ -82,8 +142,7 @@
 - Экспорт отчёта TXT (UTF-8 BOM) и CSV для Excel
 - Плановые работы с контролем просрочки
 - GPO-инвентарь ПО (`/api/gposcript`, `/api/invreport`, поиск «Софт в парке»)
-- `/api/selftest` и `/api/meta` (самодиагностика и карта для ИИ)
-- `AGENTS.md` — документ для ИИ-ассистентов
+- `/api/selftest` и `/api/meta` (самодиагностика и карта ресурсов)
 
 ### Fixed
 - Дубль `const fc` ломал весь app.js

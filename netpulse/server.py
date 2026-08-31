@@ -1140,7 +1140,8 @@ class Api:
 
     def whoami(self, q):
         user = getattr(self, "_cached_actor", None) or "admin"
-        return {"user": user,
+        role = getattr(self, "_cached_role", None) or "admin"
+        return {"user": user, "role": role,
                 "auth_enabled": bool(self.cfg.get("web_auth_enabled"))}
 
     def audit(self, q):
@@ -1171,31 +1172,98 @@ class Api:
                 "paths": paths}
 
     def map(self, q):
-        """Данные топологии: главный узел, шлюз, устройства."""
-        devices = self.svc.inventory.list_hosts()
+        """Данные топологии: главный узел, шлюз, устройства (обогащены SNMP)."""
+        devices = self.svc.infra.device_list()
         gw = self.svc.infra.gateway_ip()
         try:
             self_name = socket.gethostname()
         except Exception:
             self_name = "self"
-        nodes, seen = [], set()
-        nodes.append({"name": self_name, "ip": "", "kind": "master",
-                      "online": True, "karma": 100})
-        seen.add(self_name.lower())
+        aliases_by_ip = {}
+        hostnames_by_ip = {}
+        try:
+            for r in (self.svc.db.execute(
+                "SELECT ip, alias, hostname FROM lan_devices",
+                fetch=True) or []):
+                if not r.get("ip"):
+                    continue
+                ip = r["ip"]
+                alias = r.get("alias")
+                hn = r.get("hostname")
+                if alias and str(alias).strip() and ip not in aliases_by_ip:
+                    aliases_by_ip[ip] = alias
+                if hn and str(hn).strip() and str(hn).strip() != "-" and ip not in hostnames_by_ip:
+                    hostnames_by_ip[ip] = hn
+        except Exception:
+            pass
+        self_ip = ""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.5)
+            s.connect((gw or "8.8.8.8", 80))
+            self_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            pass
+        nodes, seen_ip = [], set()
+        nodes.append({"name": self_name, "ip": self_ip,
+                      "alias": aliases_by_ip.get(self_ip, ""),
+                      "hostname": hostnames_by_ip.get(self_ip, ""),
+                      "kind": "master", "online": True, "karma": 100,
+                      "sys_name": self_name, "sys_descr": "",
+                      "uptime_h": None, "snmp": False, "vendor": "",
+                      "os": "", "layer": "pc"})
+        if self_ip:
+            seen_ip.add(self_ip)
         if gw:
-            nodes.append({"name": "шлюз", "ip": gw, "kind": "router",
-                          "online": True, "karma": 100})
-            seen.add(gw)
+            gw_row = next((x for x in devices if x.get("ip") == gw), {})
+            nodes.append({"name": "шлюз", "ip": gw,
+                          "alias": aliases_by_ip.get(gw, ""),
+                          "hostname": hostnames_by_ip.get(gw, ""),
+                          "kind": "router", "online": True, "karma": 100,
+                          "sys_name": gw_row.get("sys_name") or "",
+                          "sys_descr": gw_row.get("sys_descr") or "",
+                          "uptime_h": gw_row.get("uptime_h"),
+                          "snmp": bool(gw_row.get("snmp_at")),
+                          "vendor": gw_row.get("vendor") or "",
+                          "os": gw_row.get("os") or "",
+                          "layer": "wan"})
+            seen_ip.add(gw)
         for h in devices:
-            key = (h.get("name") or "").lower()
-            if key in seen or not h.get("ip"):
+            ip = h.get("ip") or ""
+            if not ip or ip in seen_ip:
                 continue
-            kind = h.get("dtype") or ("router" if h.get("ip") == gw else "host")
-            nodes.append({"name": h["name"], "ip": h["ip"], "kind": kind,
-                          "online": bool(h["online"]),
-                          "karma": h.get("health_score", 100)})
-            seen.add(key)
-        return {"nodes": nodes}
+            kind = h.get("dtype") or ("router" if ip == gw else "host")
+            online = bool(h.get("online"))
+            node = {
+                "name": h["name"], "ip": ip,
+                "alias": aliases_by_ip.get(ip, ""),
+                "hostname": hostnames_by_ip.get(ip, ""),
+                "kind": kind, "online": online,
+                "karma": h.get("health_score", 100),
+                "sys_name": h.get("sys_name") or "",
+                "sys_descr": h.get("sys_descr") or "",
+                "uptime_h": h.get("uptime_h"),
+                "snmp": bool(h.get("snmp_at")),
+                "vendor": h.get("vendor") or "",
+                "os": h.get("os") or "",
+            }
+            node["layer"] = self._map_layer(kind, online, ip, gw)
+            nodes.append(node)
+            seen_ip.add(ip)
+        return {"nodes": nodes, "self_ip": self_ip, "gateway": gw}
+
+    def _map_layer(self, kind, online, ip, gw):
+        """Логический слой топологии для визуальной группировки."""
+        if kind == "router":
+            return "wan"
+        if kind == "switch":
+            return "sw"
+        if kind in ("server", "infra"):
+            return "srv"
+        if kind == "pc":
+            return "pc"
+        return "offline" if not online else "host"
 
     def infra_diff(self, q):
         try:
@@ -1212,6 +1280,62 @@ class Api:
 
     def customchecks_run(self, q):
         return self.svc.customchecks.run_all(force=True)
+
+    # ----- новые идеи сисадмина -----
+
+    def sla_ep(self, q):
+        return {"devices": self.svc.sla_period(
+            days=int(q.get("days", ["30"])[0]))}
+
+    def geo_ep(self, q):
+        return self.svc.geo_attack_map(limit=int(q.get("limit", ["150"])[0]))
+
+    def ram_forecast_ep(self, q):
+        return self.svc.ram_forecast()
+
+    def l2_map_ep(self, q):
+        mac = (q.get("mac", [""])[0] or "").strip()
+        return {
+            "status": self.svc.l2map.status(),
+            "ports": self.svc.l2map.ports_for(mac) if mac else self.svc.l2map.last_ports,
+            "lldp": self.svc.l2map.last_lldp,
+        }
+
+    def ptrs_ep(self, q):
+        upd = self.svc.l2map.resolve_ptrs()
+        return {"updated": upd}
+
+    def mtr_history_ep(self, q):
+        return {"entries": self.svc.mtr_history(
+            hours=int(q.get("hours", ["24"])[0]))}
+
+    def cve_status(self, q):
+        st = self.svc.cve.status()
+        st["enabled"] = bool(self.cfg.get("cve", {}).get("enabled"))
+        return st
+
+    def cve_scan(self, q):
+        rows = self.svc.db.execute(
+            """SELECT name, version FROM sw_inventory
+               LIMIT 100""", fetch=True) or []
+        products = [(r["name"], r["version"]) for r in rows]
+        found = self.svc.cve.check_products(products)
+        return {"found": found, "products": len(products)}
+
+    def proxmox_status(self, q):
+        return self.svc.proxmox.status()
+
+    def proxmox_poll(self, q):
+        return self.svc.proxmox.poll()
+
+    def l2_scan(self, q):
+        return self.svc.l2map.scan()
+
+    def mtr_fan(self, q):
+        return self.svc.mtr.stats()
+
+    def report_pdf(self, q):
+        return self.svc.weekly_report_text_ep()
 
     def selftest(self, q):
         checks = []
@@ -1324,6 +1448,11 @@ ROUTES_GET = {
     "infradiff": "infra_diff", "healing": "healing_status",
     "map": "map", "swagger": "swagger",
     "customchecks": "customchecks",
+    "sla": "sla_ep", "geomap": "geo_ep", "ramforecast": "ram_forecast_ep",
+    "l2map": "l2_map_ep", "ptrs": "ptrs_ep",
+    "mtrhistory": "mtr_history_ep",
+    "cvestatus": "cve_status", "proxmox": "proxmox_status",
+    "reportpdf": "report_pdf",
 }
 ROUTES_POST = {
     "settings": "settings_post",
@@ -1342,6 +1471,8 @@ ROUTES_POST = {
     "wol": "wol_wake", "lanalias": "lan_alias",
     "infrascan": "infra_scan", "infradtype": "infra_dtype",
     "idswl": "ids_wl_add", "customchecksrun": "customchecks_run",
+    "l2scan": "l2_scan", "cvescan": "cve_scan",
+    "proxmoxpoll": "proxmox_poll", "mtrfan": "mtr_fan",
 }
 
 
@@ -1356,21 +1487,29 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- auth ----------
 
     def _identity(self, qs=None):
-        """Имя вошедшего админа или None. Токены бессрочные."""
+        """(имя, роль) вошедшего пользователя или None."""
         cfg = self.api.cfg
         if not cfg.get("web_auth_enabled"):
-            return "admin"          # локальный режим без auth
+            return ("admin", "admin")     # локальный режим без auth
         candidates = []
         admins = cfg.get("web_admins") or []
         if isinstance(admins, list):
             for a in admins:
                 if isinstance(a, dict) and a.get("token"):
                     candidates.append((str(a.get("name") or "?"),
-                                       str(a["token"])))
+                                       str(a["token"]), "admin"))
+        users = cfg.get("web_users") or []
+        if isinstance(users, list):
+            for u in users:
+                if isinstance(u, dict) and u.get("token"):
+                    role = "viewer" if str(u.get("role", "admin")) == "viewer" \
+                        else "admin"
+                    candidates.append((str(u.get("name") or "?"),
+                                       str(u["token"]), role))
         if cfg.get("web_token"):
-            candidates.append(("admin", str(cfg["web_token"])))
+            candidates.append(("admin", str(cfg["web_token"]), "admin"))
         if not candidates:
-            return "admin"          # auth включён, но токен пуст -> открытый режим
+            return ("admin", "admin")     # auth включён, но токен пуст
         supplied = [self.headers.get("X-Auth", "")]
         cookie = self.headers.get("Cookie", "") or ""
         for cname in ("np_session", "np_token"):
@@ -1379,17 +1518,21 @@ class Handler(BaseHTTPRequestHandler):
                 supplied.append(m.group(1))
         if qs:
             supplied.append(qs.get("token", [""])[0])
-        for name, tok in candidates:
+        for name, tok, role in candidates:
             for s in supplied:
                 if s and hmac.compare_digest(s.encode("utf-8"),
                                              tok.encode("utf-8")):
-                    return name
+                    return (name, role)
         return None
 
     def _authed(self, qs=None):
         ident = self._identity(qs)
-        self._user = ident
+        self._user = ident[0] if ident else None
+        self._user_role = ident[1] if ident else None
         return ident is not None
+
+    def _role(self):
+        return getattr(self, "_user_role", "admin") or "admin"
 
     def _sec(self):
         """Заголовки безопасности на каждый ответ."""
@@ -1474,6 +1617,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "unauthorized"}, 401)
                 return
             self.api._cached_actor = getattr(self, "_user", None) or "admin"
+            self.api._cached_role = getattr(self, "_user_role", None) or "admin"
 
         if path == "/":
             self._static("index.html")
@@ -1750,8 +1894,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "unknown endpoint"}, 404)
             return
 
+        # RBAC: viewer (низкая роль) — только подтверждение алертов и алиасы
+        ident = self._identity(qs)
+        role = ident[1] if ident else "admin"
+        if ident and role == "viewer" and name not in ("alertsack", "lanalias"):
+            self._send_json(
+                {"error": "forbidden: роль viewer не позволяет изменение"}, 403)
+            return
+
         self.api._cached_body = body
-        self.api._cached_actor = self._identity(qs) or "admin"
+        ident2 = ident or ("admin", "admin")
+        self.api._cached_actor = ident2[0]
+        self.api._cached_role = ident2[1]
+        self._user_role = ident2[1]
         try:
             result = getattr(self.api, handler_name)(qs)
             if isinstance(result, tuple):

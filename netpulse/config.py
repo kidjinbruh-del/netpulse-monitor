@@ -28,7 +28,8 @@ DEFAULTS = {
         "good_ping_ms": 50,
         "warn_ping_ms": 120,
         "max_jitter_ms": 15,
-        "max_loss_pct": 2
+        "max_loss_pct": 2,
+        "profiles": {}   # пороговые профили по группам: {router: {...}, server: {...}}
     },
     "quota": {
         "daily_mb": 0,      # 0 = без лимита
@@ -54,7 +55,8 @@ DEFAULTS = {
         "community": "public"
     },
     "lan": {
-        "auto_scan_min": 10
+        "auto_scan_min": 10,
+        "trusted_macs": []    # доверенные MAC: новые устройства из них — не алерт
     },
     "diagnostics": {
         "trace_targets": ["8.8.8.8", "1.1.1.1", "77.88.8.8"],
@@ -64,7 +66,9 @@ DEFAULTS = {
         "target": "8.8.8.8",
         "max_hops": 12,
         "cycle_sec": 10,
-        "pings_per_hop": 2
+        "pings_per_hop": 2,
+        "targets": [],        # веер целей для ротации (если пусто — только target)
+        "rotate_sec": 600     # период смены цели при веере
     },
     "speedtest": {
         "url_down": "https://speed.cloudflare.com/__down?bytes={bytes}",
@@ -131,6 +135,33 @@ DEFAULTS = {
         "enabled": False,
         "tasks": []
     },
+    "web_users": [],          # RBAC: [{name, token, role: admin|viewer}]
+    "proxmox": {
+        "enabled": False,
+        "host": "",
+        "port": 8006,
+        "verify_tls": False,
+        "token_id": "",
+        "token_secret": ""
+    },
+    "report": {
+        "weekly": {
+            "enabled": False,
+            "day": "mon",     # day of week для авто-отчёта
+            "time": "08:00",
+            "to_email": ""
+        }
+    },
+    "geo": {
+        "enabled": False      # резолв стран для публичных IP (постраны для карты атак)
+    },
+    "cve": {
+        "enabled": False      # онлайн-CVE-проверка для инвентаря ПО
+    },
+    "escalate": {
+        "enabled": False,
+        "unack_min": 30       # непрочитанный алерт дольше -> повторное уведомление
+    },
     "web_tls": {
         "enabled": False,
         "cert": "netpulse/certs/cert.pem",
@@ -162,9 +193,10 @@ def _validate(cfg):
     numeric = {
         "watchdog": ("interval_min", "timeout_sec", "disk_free_pct",
                      "ram_free_mb", "event_hours", "offline_after_polls"),
-        "mtr": ("max_hops", "cycle_sec", "pings_per_hop"),
+        "mtr": ("max_hops", "cycle_sec", "pings_per_hop", "rotate_sec"),
         "quota": ("warn_pct",),
         "lan": ("auto_scan_min",),
+        "escalate": ("unack_min",),
         "ping_interval_sec": (),
         "db_cleanup_days": (),
     }
@@ -184,6 +216,43 @@ def _validate(cfg):
     return cfg
 
 
+def _env_overrides(path=CONFIG_FILE):
+    """Сбор NETPULSE_* из окружения и .env-файла рядом с конфигом.
+    Формат ключей: NETPULSE_WEB_PORT, NETPULSE_EMAIL_SMTP_HOST, ..."""
+    raw = {}
+    env_file = os.path.join(os.path.dirname(path) or ".", ".env")
+    if os.path.exists(env_file):
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, _, v = line.partition("=")
+                    raw[k.strip()] = v.strip()
+        except Exception as e:
+            print(f"[config] .env: {e}")
+    for k, v in dict(os.environ).items():
+        raw.setdefault(k, v)
+    out = {}
+    for k, v in raw.items():
+        if not k.startswith("NETPULSE_"):
+            continue
+        keys = k[len("NETPULSE_"):].lower().split("_")
+        node, prev = out, []
+        for key in keys[:-1]:
+            node = node.setdefault(key, {})
+            prev.append(key)
+        if isinstance(node.get(keys[-1]), dict):
+            continue
+        try:
+            v = json.loads(v) or v
+        except Exception:
+            pass
+        node[keys[-1]] = v
+    return out
+
+
 def load_config(path=CONFIG_FILE):
     cfg = copy.deepcopy(DEFAULTS)
     try:
@@ -193,6 +262,8 @@ def load_config(path=CONFIG_FILE):
             _deep_merge(cfg, saved)
     except Exception as e:
         print(f"[config] ошибка загрузки: {e}")
+
+    _deep_merge(cfg, _env_overrides(path))   # env/.env поверх config.json
 
     cfg = decrypt_config(cfg)   # dpapi: -> plaintext (в памяти только)
     cfg = _validate(cfg)

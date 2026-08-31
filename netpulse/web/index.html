@@ -62,6 +62,7 @@
       <button data-view="ai" class="nav-btn"><svg class="ic"><use href="#i-chip"/></svg>AI-аналитика</button>
       <button data-view="alerts" class="nav-btn"><svg class="ic"><use href="#i-bell"/></svg>Алерты<span id="alerts-badge" class="badge hidden">0</span></button>
       <button data-view="history" class="nav-btn"><svg class="ic"><use href="#i-clock"/></svg>История</button>
+      <button data-view="sysadmin" class="nav-btn"><svg class="ic"><use href="#i-gear"/></svg>Сисадмин</button>
       <button data-view="settings" class="nav-btn"><svg class="ic"><use href="#i-gear"/></svg>Настройки</button>
     </nav>
 
@@ -81,7 +82,7 @@
         <div class="pill sys-pill" id="sys-pill" title="Процессор и память этой машины">
           <span>CPU <b id="pill-cpu">—%</b></span><span>RAM <b id="pill-mem">—%</b></span>
         </div>
-        <div class="pill" id="mode-pill" title="Режим трафика: Live=scapy, Net=psutil, Sim=симуляция"><span class="dot"></span><b>…</b></div>
+        <div class="pill" id="mode-pill" title="Режим трафика: Live=scapy, Net=psutil"><span class="dot"></span><b>…</b></div>
         <div class="pill quality-pill" id="quality-pill"><span class="dot"></span><span id="quality-text">—</span></div>
         <div class="pill clock" id="clock">--:--:--</div>
         <button class="icon-btn" title="Отчёт TXT" onclick="window.open('/report.txt')"><svg class="ic"><use href="#i-doc"/></svg></button>
@@ -339,7 +340,14 @@
     <!-- ============ INFRA ============ -->
     <section class="view" id="view-infra">
       <div class="card">
-        <div class="card-title">Топология сети</div>
+        <div class="card-title">Топология сети
+          <span class="right" style="display:inline-flex;gap:6px">
+            <button class="mini-btn" title="Скачать SVG" onclick="UI.exportMap('svg')"><svg class="ic sm"><use href="#i-doc"/></svg>SVG</button>
+            <button class="mini-btn" title="Скачать PNG" onclick="UI.exportMap('png')"><svg class="ic sm"><use href="#i-doc"/></svg>PNG</button>
+            <button class="mini-btn" title="Скачать JSON" onclick="UI.exportMap('json')"><svg class="ic sm"><use href="#i-doc"/></svg>JSON</button>
+            <button class="mini-btn" title="Печать топологии (светлая схема)" onclick="UI.printMap()"><svg class="ic sm"><use href="#i-doc"/></svg>Печать</button>
+          </span>
+        </div>
         <div id="infra-map" class="result-box" style="min-height:220px;display:flex;justify-content:center"></div>
       </div>
       <div class="card">
@@ -453,6 +461,52 @@
         <canvas id="chart-hist" height="220"></canvas>
         <div class="card-title mt18">Джиттер и потери</div>
         <canvas id="chart-hist-ping" height="150"></canvas>
+      </div>
+    </section>
+
+    <!-- ============ SYSADMIN ============ -->
+    <section class="view" id="view-sysadmin">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">SLA-доступность узлов за 30 дней
+            <button class="mini-btn right" onclick="UI.refreshSla()">Обновить</button></div>
+          <div id="sla-box" class="muted">загрузка…</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Прогноз ОЗУ мастера
+            <button class="mini-btn right" onclick="UI.refreshRam()">Обновить</button></div>
+          <div id="ram-box" class="muted">загрузка…</div>
+        </div>
+        <div class="card">
+          <div class="card-title">L2-порты (MAC → порт коммутатора)
+            <button class="mini-btn right" onclick="UI.refreshL2()">Опрос</button></div>
+          <div id="l2-box" class="muted">загрузка…</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Гео-карта атак
+            <button class="mini-btn right" onclick="UI.refreshGeo()">Обновить</button></div>
+          <div id="geo-box" class="muted">загрузка…</div>
+        </div>
+        <div class="card wide">
+          <div class="card-title">Proxmox VE
+            <button class="mini-btn right" onclick="UI.refreshProxmox()">Опрос</button>
+            <span id="pxm-ts" class="muted right"></span></div>
+          <div id="pxm-box" class="muted">загрузка…</div>
+        </div>
+        <div class="card">
+          <div class="card-title">MTR-история (24 ч)
+            <button class="mini-btn right" onclick="UI.refreshMtrHist()">Обновить</button></div>
+          <div id="mtrhist-box" class="muted">загрузка…</div>
+        </div>
+        <div class="card">
+          <div class="card-title">CVE-проверка ПО
+            <button class="mini-btn right" onclick="UI.runCve()">Проверить</button></div>
+          <div id="cve-box" class="muted">загрузка…</div>
+        </div>
+        <div class="card wide">
+          <div class="card-title">Лента изменений (audit)</div>
+          <div id="audit-box" class="muted">загрузка…</div>
+        </div>
       </div>
     </section>
 

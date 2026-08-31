@@ -4,12 +4,10 @@ Sniffer - захват и анализ сетевого трафика
 Три режима:
 - 'real'   : перехват пакетов через scapy (нужны права администратора) - с данными по IP
 - 'psutil' : реальная скорость интерфейсов через psutil (без прав) - без данных по IP
-- 'sim'    : симуляция (только для демонстрации)
 """
 
 import threading
 import time
-import random
 import sys
 from collections import defaultdict, deque
 import logging
@@ -28,8 +26,8 @@ except ImportError:
 class Sniffer:
     def __init__(self, mode_config="auto"):
         self.running = False
-        self.mode = "sim"  # real | psutil | sim (определяется в start())
-        self._mode_config = mode_config  # auto | psutil | sim
+        self.mode = "psutil"  # real | psutil (определяется в start())
+        self._mode_config = mode_config  # auto | psutil
         self.start_time = time.time()
         self.lock = threading.RLock()
         self._stop_event = threading.Event()
@@ -56,7 +54,6 @@ class Sniffer:
         self._updown = deque(maxlen=10)  # (t, in_delta, out_delta)
 
         self._sniff_thread = None
-        self._sim_thread = None
         self._net_thread = None
 
         self._db_callback = None
@@ -75,7 +72,6 @@ class Sniffer:
 
         with self._thread_lock:
             self._sniff_thread = None
-            self._sim_thread = None
             self._net_thread = None
 
         # 1. Полный перехват через scapy (только с правами администратора)
@@ -97,13 +93,7 @@ class Sniffer:
             except Exception as e:
                 logger.warning(f"psutil недоступен: {e}")
 
-        # 3. Симуляция (явно запрошенная или крайний fallback)
-        self.mode = "sim"
-        logger.info("Запущена симуляция трафика")
-        self._sim_thread = threading.Thread(target=self._sim_loop, daemon=True)
-        with self._thread_lock:
-            self._sim_thread = self._sim_thread
-        self._sim_thread.start()
+        logger.error("Нет доступного режима трафика (real/psutil) — сниффер не запущен")
 
     def _try_start_scapy(self):
         try:
@@ -170,33 +160,6 @@ class Sniffer:
 
             if self._stop_event.wait(1):
                 break
-
-    def _sim_loop(self):
-        while self.running and not self._stop_event.is_set():
-            try:
-                if random.random() > 0.7:
-                    for _ in range(random.randint(3, 10)):
-                        if not self.running or self._stop_event.is_set():
-                            return
-                        ip = f"192.168.{random.randint(1,255)}.{random.randint(1,255)}"
-                        size = random.randint(500, 1500)
-                        direction = "out" if random.random() > 0.3 else "in"
-                        self._add_packet(ip, size, direction)
-                        if self._stop_event.wait(0.001):
-                            return
-                else:
-                    if not self.running or self._stop_event.is_set():
-                        return
-                    ip = f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}"
-                    size = random.randint(64, 500)
-                    direction = "in" if random.random() > 0.4 else "out"
-                    self._add_packet(ip, size, direction)
-                    time.sleep(0.02)
-
-            except Exception as e:
-                logger.debug(f"Ошибка в симуляции: {e}")
-                if self._stop_event.wait(0.1):
-                    return
 
     def _process_packet(self, packet):
         if not self.running or self._stop_event.is_set():
@@ -373,7 +336,7 @@ class Sniffer:
             logger.error(f"Ошибка сохранения при остановке: {e}")
 
         with self._thread_lock:
-            for t in (self._sniff_thread, self._sim_thread, self._net_thread):
+            for t in (self._sniff_thread, self._net_thread):
                 if t and t.is_alive():
                     t.join(timeout=3)
 

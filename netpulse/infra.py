@@ -187,6 +187,21 @@ def ping(ip: str, timeout_ms=800) -> bool:
         return False
 
 
+def _ping_ms(ip: str, timeout_ms=800):
+    """Замер латентности (миллисекунды) или None."""
+    cmd = (["ping", "-n", "1", "-w", str(timeout_ms), ip] if sys.platform == "win32"
+           else ["ping", "-c", "1", "-W", "1", ip])
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=3,
+                           creationflags=flags)
+        out = r.stdout.decode("utf-8", "replace")
+        m = re.search(r"[=<]\s*(\d+(?:[.,]\d+)?)\s*(?:мс|ms)", out, re.IGNORECASE)
+        return float(m.group(1).replace(",", ".")) if m else None
+    except Exception:
+        return None
+
+
 # ---------- модуль ----------
 
 def _now_iso():
@@ -251,6 +266,28 @@ class Infra:
                                 "new": new.get(k)})
         return {"diff": changes,
                 "compared": [rows[1]["timestamp"], rows[0]["timestamp"]]}
+
+    def auto_diff(self, host_id, name="", ip=""):
+        """Авто-сравнение последних двух снапшотов; при расхождении — алерт."""
+        try:
+            d = self.snap_diff(host_id, 2)
+        except Exception as e:
+            logger.debug("auto_diff %s: %s", host_id, e)
+            return
+        diff = d.get("diff") or []
+        if not diff:
+            return
+        interesting = [c for c in diff if c["field"] in
+                       ("sys_name", "sys_descr", "dtype", "uptime_h")]
+        if not interesting:
+            return
+        # uptime_h стал значительно меньше прошлого -> перезагрузка устройства
+        changed = ", ".join(
+            f"{c['field']}: {c['old']} -> {c['new']}" for c in interesting[:4])
+        self.svc.push_alert(
+            "INFRA_DIFF",
+            f"Конфигурация изменилась: {name or ip} — {changed}",
+            "infra", rate=600)
 
     def snapshots_list(self, host_id):
         return self.svc.db.execute(
@@ -334,6 +371,20 @@ class Infra:
                     "sys_descr": str(snmp.get("sysDescr") or "")[:200],
                     "uptime_h": round(up / 360000.0, 1) if isinstance(up, int) else None,
                 })
+            # профиль порогов для типа устройства: алерт при превышении пинга
+            if alive and h.get("dtype"):
+                try:
+                    prof = self.svc.profile_thresholds(h["dtype"])
+                    if prof:
+                        ms = _ping_ms(ip)
+                        if ms is not None and ms > prof["ping_high"]:
+                            self.svc.push_alert(
+                                "PROFILE_LIMIT",
+                                f"{h.get('name') or ip}: пинг {ms:.0f}мс больше "
+                                f"профиля {h['dtype']} "
+                                f"({prof['ping_high']:.0f}мс)", "infra", rate=1800)
+                except Exception:
+                    pass
             if not h.get("dtype_manual"):
                 dtype = self.classify(ip, snmp, winrm_ok=None)
                 if dtype:
@@ -341,6 +392,7 @@ class Infra:
             if snmp:
                 try:
                     self.save_snapshot(hid)
+                    self.auto_diff(hid, h.get("name"), ip)
                 except Exception as e:
                     logger.debug("снэпшот %s: %s", ip, e)
             sets = ", ".join(f"{k} = ?" for k in upd)
