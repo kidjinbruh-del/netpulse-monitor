@@ -1,0 +1,41 @@
+# services/netpulse/config.peers.example.yaml — шаблон настройки REAL PEERS.
+# Скопируйте в config.local.yaml своего узла P2P_Core (в корне проекта)
+# и замените placeholders на реальные адреса.
+#
+# Схема mesh-сети:
+#   Центральный узел NetPulse (сервер, порт 9000) <-peers->  удалённые P2P-узлы
+#
+# ПРИМЕЧАНИЯ:
+#   1) network.host в config.yaml центрального узла должен быть 0.0.0.0 (уже так)
+#   2) Откройте/пробросьте TCP-порт 9000 (и 9001 для второго узла) на шлюзе/FW
+#   3) URI форма: ws://<IP_or_DOMAIN>:<port>/ws/   (суффикс /ws/ обязателен!
+#      main.py сам дописывает {ctx.NODE} к uri пира)
+#   4) Оба узла добавляют друг друга как пиров (обязательно)
+#   5) Для интернета желателен TLS (вне scope, см. src/networking)
+
+# ---------------- config.local.yaml (узел A: псевдоним, центр) ----------------
+alias: home-center
+secret: null
+
+peers:
+  # Удалённый узел коллеги (публичный IP/домен + проброс порта 9001)
+  - node_id: PeerB
+    uri: ws://peer-b.example.com:9001/ws/
+  # - При необходимости IPv6 / Radmin-VPN:
+  #   node_id: PeerB
+  #   uri: ws://26.110.39.52:9001/ws/
+
+# ---------------- config.local.yaml (узел B: удалённый P2P-узел) ----------------
+# alias: remote-b
+# secret: null
+#
+# peers:
+#   - node_id: NodeA
+#     uri: ws://home-center.example.com:9000/ws/
+
+# ------------------------------------------------------------------------ #
+#  Проверка: после запуска узла вызовите RPC
+#     netpulse.peers            -> увидите configured/connected
+#     netinfo.neighbors         -> таблица соседей
+#     netpulse.gather           -> распределённая сводка мониторинга
+# ------------------------------------------------------------------------ #

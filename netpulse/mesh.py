@@ -23,21 +23,17 @@ import uuid
 
 import msgpack
 
+from netpulse.p2p_core.networking.mesh_auth import SIG_FIELD, sign_hello
+
 logger = logging.getLogger(__name__)
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-PROTOCOL_VERSION = "2.0"   # совместимость с src.networking.neighbor_table
-SIG_FIELD = "sig"
+PROTOCOL_VERSION = "2.0"   # совместимость с netpulse.p2p_core.networking.neighbor_table
 
 
 def _sign_hello(node_id, session_id, secret):
-    """Отпечаток HELLO общим секретом (аналог src.networking.mesh_auth)."""
-    if not secret:
-        return ""
-    msg = f"{node_id}\n{session_id}".encode("utf-8")
-    return base64.b64encode(
-        hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).digest()
-    ).decode("ascii")
+    """Отпечаток HELLO общим секретом (обёртка над mesh_auth, "" при None)."""
+    return sign_hello(node_id, session_id, secret) or ""
 
 
 class MeshError(Exception):

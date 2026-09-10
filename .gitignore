@@ -28,3 +28,6 @@ backups/
 AGENTS.md
 TASK_*.md
 .deep-copilot/
+
+# Бинарники CryptoPro (данные сервиса, не код)
+netpulse/p2p_core/services/certstool/*.exe
