@@ -2,6 +2,25 @@
 
 Формат: Keep a Changelog. Версии семантические.
 
+## [2.2.0] — 2026-09-11
+
+### Added
+- **Слияние P2P_Core в NetPulse**: пакет `netpulse/p2p_core/` (mesh-сеть
+  узлов: `networking/`, `internal_modules/`, `services/`, `node_runner.py`).
+  Узлы node0/node1 больше не зависят от копии исходников — единый код меша
+  из одного репозитория.
+- HMAC-аутентификация меша: `mesh_auth.py` — подпись HELLO по общему
+  секрету (`p2p.secret`), проверка подписи при accept (hello_reject для
+  невалидных), Hub и ноды используют общий модуль.
+- `node_runner.py` — универсальный запускатель узлов P2P_Core.
+- `CONTRIBUTORS.md` — учёт совместной разработки с
+  [olegs32/P2P_Core](https://github.com/olegs32/P2P_Core).
+
+### Fixed
+- Тесты восстановления (9/9): mesh-auth (в т.ч. cross-compat с Hub),
+  IP-allowlist, DPAPI-шифрование конфига, BOM-fix, P2P-роуты.
+- Git Flow: ветки `main`/`develop`, теги `v2.1.0` и `v2.2.0`.
+
 ## [2.0.0] — 2026-08-31
 
 Полный цикл идей сисадмина (см. [IDEAS.md](IDEAS.md)): 19/20 реализовано,

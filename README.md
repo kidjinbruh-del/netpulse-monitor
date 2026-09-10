@@ -1,6 +1,6 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
 ![Tests](https://img.shields.io/badge/tests-28%2F28-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -273,6 +273,7 @@ python -m tests.test_netpulse    # веб: сервер, auth, модули пл
 
 ```
 netpulse/            веб-версия (основная)
+  p2p_core/            mesh-сеть узлов (совместно с olegs32/P2P_Core)
   server.py            HTTP-сервер, REST/SSE/Prometheus, firewall, бэкапы
   services.py          MonitorService: трафик, пинг, IDS, MTR, сканер ЛС, SLA, гео, отчёты
   l2map.py             L2-карта: Bridge-MIB (SNMP-walk), LLDP, PTR
@@ -304,6 +305,11 @@ IDEAS.md             бэклог идей сисадмина
 
 ---
 
-## 10. Лицензия
+## 10. Лицензия и контрибьюторы
 
 MIT — см. [LICENSE](LICENSE).
+
+Проект ведётся совместно. Пакет distributed-mesh **P2P_Core**
+(`netpulse/p2p_core/`) разрабатывается совместно с
+[olegs32/P2P_Core](https://github.com/olegs32/P2P_Core) — см.
+[CONTRIBUTORS.md](CONTRIBUTORS.md).
