@@ -2000,6 +2000,20 @@ const UI = {
 
     const sim = () => {
       let moved = false;
+      for (let i = 0; i < all.length; i++) {
+        for (let j = i + 1; j < all.length; j++) {
+          const a = pos[all[i].node_id], b = pos[all[j].node_id];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          const minD = radius(all[i].node_id) + radius(all[j].node_id) + 14;
+          if (d < minD * 3) {
+            const f = (minD - d) * 0.012 / (1 + d * 0.02);
+            const ux = dx / d, uy = dy / d;
+            a.vx -= ux * f; a.vy -= uy * f;
+            b.vx += ux * f; b.vy += uy * f;
+          }
+        }
+      }
       all.forEach(n => {
         const p = pos[n.node_id];
         edges.forEach(e => {
@@ -2022,7 +2036,7 @@ const UI = {
         }
         a.vx *= 0.85; a.vy *= 0.85;
         a.x += a.vx; a.y += a.vy;
-        if (Math.abs(a.vx) + Math.abs(a.vy) > 0.02) moved = true;
+        if (Math.abs(a.vx) + Math.abs(a.vy) > 0.3) moved = true;
       });
       return moved;
     };
