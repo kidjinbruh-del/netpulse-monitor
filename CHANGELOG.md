@@ -12,6 +12,10 @@
 - **Nmap-сервис**: пакет `netpulse/p2p_core/services/nmap/` — RPC
   `status`/`ping_sweep`/`ports`/`scan` поверх `nmap.exe`, разбор XML
   без внешних зависимостей.
+- **Топология решётки**: вкладка Mesh → блок «Топология решётки» —
+  animate-рендер графа (SVG, чистый JS, force-simulation) по RPC
+  `netinfo.topology`, клик по узлу открывает панель деталей
+  (статус, host:port, версия, сервисы, число связей).
 
 ### Fixed
 - Тесты `tests/test_p2p_core.py` (50/50) — router, NeighborTable, Pipe,

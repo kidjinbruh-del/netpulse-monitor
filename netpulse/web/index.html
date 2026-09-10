@@ -530,6 +530,15 @@
           <button class="mini-btn right" onclick="UI.loadMeshHeat()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
         <div id="mesh-heat" class="result-box muted">загрузка…</div>
       </div>
+      <div class="card">
+        <div class="card-title">Топология решётки <span class="hint">netinfo.topology — force-layout, клик по узлу</span>
+          <button class="mini-btn right" onclick="UI.loadMeshTopo()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+        <div id="mesh-topo-wrap">
+          <svg id="mesh-topo-svg" class="topo-svg"></svg>
+          <div id="mesh-topo-detail" class="topo-detail muted">кликните по узлу для деталей</div>
+        </div>
+        <div id="mesh-topo-status" class="muted" style="margin-top:6px">—</div>
+      </div>
       <div class="grid-2">
         <div class="card">
           <div class="card-title">Сервисы на ноде
