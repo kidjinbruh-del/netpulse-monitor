@@ -1875,6 +1875,7 @@ const UI = {
         (st.last_error ? `<div class="kv"><span>Ошибка</span><b class='warn'>${esc(st.last_error)}</b></div>` : "");
       await this.loadMeshNodes();
       this.loadMeshHeat();
+      this.loadMeshTopo();
     } catch (e) {
       if (e instanceof UnauthorizedError) { this.showLogin(); return; }
       $("mesh-status").innerHTML = `<span class='warn'>${esc(String(e))}</span>`;
@@ -1938,6 +1939,142 @@ const UI = {
       if (e instanceof UnauthorizedError) { this.showLogin(); return; }
       box.innerHTML = `<span class='warn'>${esc(String(e))}</span>`;
     }
+  },
+
+  async loadMeshTopo() {
+    const svg = $("mesh-topo-svg");
+    if (!svg) return;
+    if (this._topoTimer) { clearInterval(this._topoTimer); this._topoTimer = null; }
+    const status = $("mesh-topo-status");
+    const detailBox = $("mesh-topo-detail");
+    const node = $("mesh-node").value || $("rpc-node").value;
+    status.textContent = "строю топологию…";
+    let data;
+    try {
+      data = await this.p2pCall("netinfo", "topology", {}, node);
+    } catch (e) {
+      status.innerHTML = `<span class="warn">${esc(String(e))}</span>`;
+      return;
+    }
+    const nodes = data.nodes || [];
+    const clients = data.clients || [];
+    if (!nodes.length) { status.textContent = "нет узлов в решётке"; return; }
+    const all = nodes.concat(clients);
+    const byNid = {}; all.forEach(n => byNid[n.node_id] = n);
+    const edges = (data.edges || []).filter(e => byNid[e.src] && byNid[e.dst]);
+    const root = data.root || data.own;
+    const ns = "http://www.w3.org/2000/svg";
+    const cvar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#6ad2ff";
+    const isRoot = id => id === root;
+    const isClient = id => !isRoot(id) && !nodes.some(n => n.node_id === id);
+    const radius = id => (isRoot(id) || isClient(id)) ? 24 : 19;
+    const color = id => isRoot(id) ? cvar("--cyan") : (isClient(id) ? "var(--amber)" : "var(--violet)");
+    const W = svg.getAttribute("width") || 880, H = svg.getAttribute("height") || 430;
+    const cx = W / 2, cy = H / 2;
+
+    const pos = {};
+    all.forEach((n, i) => {
+      const a = (i / Math.max(all.length, 1)) * Math.PI * 2;
+      pos[n.node_id] = {
+        x: cx + Math.cos(a) * (isRoot(n.node_id) ? 0 : 150),
+        y: cy + Math.sin(a) * (isRoot(n.node_id) ? 0 : 150),
+        vx: 0, vy: 0,
+      };
+    });
+
+    const map = n => {
+      const node_id = n.node_id || n;
+      const info = byNid[node_id] || {};
+      const online = info.status === "connected" ? `<span class="ok-dot"></span>online` : `<span class="warn">недоступна</span>`;
+      return `<div class="kv"><span>Нода</span><b>${esc(node_id)}</b> ${online}</div>` +
+        (info.host ? `<div class="kv"><span>Адрес</span><b class="mono">${esc(info.host)}:${info.port || 0}</b></div>` : "") +
+        (info.version ? `<div class="kv"><span>Протокол</span><b>${esc(info.version)}</b></div>` : "") +
+        (info.services && info.services.length ? `<div class="kv"><span>Сервисы</span><b style="font-size:11px">${esc(info.services.join(", "))}</b></div>` : "") +
+        `<div class="kv"><span>Связей</span><b>${edges.filter(e => e.src === node_id || e.dst === node_id).length}</b></div>`;
+    };
+
+    if (data.errors && Object.keys(data.errors).length) {
+      status.innerHTML = `<span class="muted">часть узлов молчит:</span> ` +
+        Object.entries(data.errors).map(([k]) => `<span class="warn">${esc(k)}</span>`).join(", ");
+    } else { status.textContent = `${all.length} узлов · ${edges.length} связей · root ${esc(root)}`; }
+
+    const sim = () => {
+      let moved = false;
+      all.forEach(n => {
+        const p = pos[n.node_id];
+        edges.forEach(e => {
+          let pA, pB;
+          if (e.src === n.node_id) { pA = p; pB = pos[e.dst]; }
+          else if (e.dst === n.node_id) { pA = p; pB = pos[e.src]; }
+          else return;
+          const dx = pB.x - pA.x, dy = pB.y - pA.y;
+          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          const f = (d - 135) * 0.006;
+          pA.vx += (dx / d) * f; pA.vy += (dy / d) * f;
+          pB.vx -= (dx / d) * f; pB.vy -= (dy / d) * f;
+        });
+      });
+      all.forEach(n => {
+        const a = pos[n.node_id];
+        if (!isRoot(n.node_id)) {
+          const dx = cx - a.x, dy = cy - a.y;
+          a.vx += dx * 0.0018; a.vy += dy * 0.0018;
+        }
+        a.vx *= 0.85; a.vy *= 0.85;
+        a.x += a.vx; a.y += a.vy;
+        if (Math.abs(a.vx) + Math.abs(a.vy) > 0.02) moved = true;
+      });
+      return moved;
+    };
+
+    const paint = () => {
+      svg.innerHTML = "";
+      edges.forEach(e => {
+        const a = pos[e.src], b = pos[e.dst];
+        const l = document.createElementNS(ns, "line");
+        l.setAttribute("x1", a.x); l.setAttribute("y1", a.y); l.setAttribute("x2", b.x); l.setAttribute("y2", b.y);
+        l.setAttribute("stroke", e.verified ? cvar("--border") : "var(--amber)");
+        l.setAttribute("stroke-width", e.verified ? 1.5 : 1.2);
+        if (!e.verified) l.setAttribute("stroke-dasharray", "5,4");
+        svg.appendChild(l);
+      });
+      all.forEach(n => {
+        const p = pos[n.node_id];
+        const g = document.createElementNS(ns, "g");
+        const circ = document.createElementNS(ns, "circle");
+        circ.setAttribute("cx", p.x); circ.setAttribute("cy", p.y); circ.setAttribute("r", radius(n.node_id));
+        circ.setAttribute("fill", "#0e1a2e"); circ.setAttribute("stroke", color(n.node_id));
+        circ.setAttribute("stroke-width", 2);
+        g.appendChild(circ);
+        const t = document.createElementNS(ns, "text");
+        t.setAttribute("x", p.x); t.setAttribute("y", p.y + 4);
+        t.setAttribute("text-anchor", "middle"); t.setAttribute("fill", "#dbe4f0");
+        t.setAttribute("font-size", 10); t.setAttribute("font-family", "system-ui");
+        t.textContent = n.node_id;
+        g.appendChild(t);
+        g.addEventListener("click", () => {
+          if (this._topoTimer) { clearInterval(this._topoTimer); this._topoTimer = null; }
+          document.querySelectorAll("#mesh-topo-svg .topo-sel").forEach(s => s.remove());
+          const sel = document.createElementNS(ns, "circle");
+          sel.setAttribute("cx", p.x); sel.setAttribute("cy", p.y); sel.setAttribute("r", radius(n.node_id) + 6);
+          sel.setAttribute("class", "topo-sel");
+          sel.setAttribute("fill", "none"); sel.setAttribute("stroke", "#ffd166");
+          sel.setAttribute("stroke-width", 2);
+          g.appendChild(sel);
+          detailBox.classList.remove("muted");
+          detailBox.innerHTML = map(n);
+        });
+        svg.appendChild(g);
+      });
+    };
+
+    let frames = 0;
+    paint();
+    this._topoTimer = setInterval(() => {
+      if (sim()) paint();
+      if (frames > 120) { clearInterval(this._topoTimer); this._topoTimer = null; }
+      frames++;
+    }, 50);
   },
 
   async loadMeshNodes() {
