@@ -23,6 +23,7 @@
     <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></symbol>
     <symbol id="i-apps" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
     <symbol id="i-lan" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-2.5h12V16"/></symbol>
+    <symbol id="i-mesh" viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2.2"/><circle cx="4.5" cy="17.5" r="2.2"/><circle cx="19.5" cy="17.5" r="2.2"/><path d="M12 6.7v4.3M6.7 17.5h10.6M6.7 15.3l4.5-4.3M17.3 15.3l-4.5-4.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
     <symbol id="i-capture" viewBox="0 0 24 24"><path d="M4 17l4-8 3 5 3-9 3 7 3-3"/><rect x="2.5" y="4" width="19" height="16" rx="2"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l12 7.5-12 7.5v-15z"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
@@ -57,6 +58,7 @@
       <button data-view="lan" class="nav-btn"><svg class="ic"><use href="#i-lan"/></svg>Локальная сеть</button>
       <button data-view="park" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Парк ПК</button>
       <button data-view="infra" class="nav-btn"><svg class="ic"><use href="#i-globe"/></svg>Инфраструктура</button>
+      <button data-view="mesh" class="nav-btn"><svg class="ic"><use href="#i-mesh"/></svg>Меш</button>
       <button data-view="capture" class="nav-btn"><svg class="ic"><use href="#i-capture"/></svg>Захват пакетов</button>
       <button data-view="security" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Безопасность<span id="ids-badge" class="badge hidden">0</span></button>
       <button data-view="ai" class="nav-btn"><svg class="ic"><use href="#i-chip"/></svg>AI-аналитика</button>
@@ -507,6 +509,63 @@
           <div class="card-title">Лента изменений (audit)</div>
           <div id="audit-box" class="muted">загрузка…</div>
         </div>
+      </div>
+    </section>
+
+    <!-- ============ MESH (P2P) ============ -->
+    <section class="view" id="view-mesh">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Статус моста в решётку
+            <button class="mini-btn right" onclick="UI.loadMesh()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+          <div id="mesh-status" class="result-box muted">проверка связи…</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Ноды решётки</div>
+          <div id="mesh-nodes" class="result-box muted">—</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Сервисы на ноде
+            <span class="right" style="display:inline-flex;gap:6px">
+              <select id="mesh-node" class="inp sel" onchange="UI.loadMeshServices()"></select>
+              <button class="mini-btn" onclick="UI.loadMeshServices()"><svg class="ic sm"><use href="#i-refresh"/></svg></button>
+            </span></div>
+          <div id="mesh-services" class="result-box muted">—</div>
+        </div>
+        <div class="card" id="mesh-page-card">
+          <div class="card-title" id="mesh-page-title">Рендер сервиса</div>
+          <div id="mesh-page" class="result-box muted">кликните по сервису слева — здесь появится готовая страница; остальное доступно через RPC-консоль ниже</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">RPC-консоль <span class="hint">любой сервис/метод любой ноды решётки (RPC-абстракция)</span></div>
+        <div class="row inline">
+          <select id="rpc-node" class="inp sel" style="min-width:150px"></select>
+          <select id="rpc-service" class="inp sel" onchange="UI.rpcFillMethods()" style="min-width:150px"></select>
+          <input id="rpc-method" class="inp grow mono" list="rpc-methods-dl" placeholder="метод (из списка или свой)">
+          <datalist id="rpc-methods-dl"></datalist>
+          <input id="rpc-data" class="inp mono" placeholder='параметры JSON, например {"subject":"Cert"}' style="flex:2;min-width:180px">
+          <button class="btn accent" onclick="UI.rpcCall()"><svg class="ic sm"><use href="#i-zap"/></svg>Вызвать</button>
+        </div>
+        <div id="rpc-result" class="result-box mono muted" style="white-space:pre-wrap;max-height:360px;overflow:auto">—</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Глобальный инвентарь ПО по нодам
+          <button class="mini-btn right" onclick="UI.meshGlobalSoft()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+        <div id="mesh-global-soft" class="result-box muted">загрузить для сводки</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Аудит безопасности меша
+          <button class="mini-btn right" onclick="UI.meshAudit()"><svg class="ic sm"><use href="#i-refresh"/></svg></button></div>
+        <div id="mesh-audit" class="result-box muted">обновить для проверки</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Все ноды (подробнее)</div>
+        <table class="tbl" id="mesh-nodes-table">
+          <thead><tr><th>Нода</th><th>Адрес</th><th>Статус</th><th>Версия</th><th>Сервисы</th></tr></thead>
+          <tbody></tbody></table>
       </div>
     </section>
 

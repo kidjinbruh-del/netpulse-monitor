@@ -109,6 +109,20 @@ DEFAULTS = {
         "keep": 7,
         "dir": "C:\\Backups"
     },
+    "p2p": {
+        "enabled": True,
+        "host": "127.0.0.1",
+        "port": 9000,
+        "node_id": "NetPulseHub",
+        "target_node": "Node0",
+        "reconnect_sec": 5,
+        "call_timeout": 15,
+        "secret": ""
+    },
+    "ip_allowlist": {
+        "enabled": False,
+        "networks": ["192.168.1.0/24", "127.0.0.0/8"]
+    },
     "journal": {
         "default_minutes": 0
     },

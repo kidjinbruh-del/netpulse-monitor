@@ -23,17 +23,17 @@ const $ = (id) => document.getElementById(id);
 const Auth = {
   get() { return localStorage.getItem("np-token") || ""; },
   set(t) { localStorage.setItem("np-token", t); },
-  suffix() { const t = this.get(); return t ? `?token=${encodeURIComponent(t)}` : ""; },
+  suffix(path) { const t = this.get(); if (!t) return ""; return ((path || "").includes("?") ? "&" : "?") + "token=" + encodeURIComponent(t); },
 };
 
 async function apiGet(path) {
-  const r = await fetch("/api/" + path + Auth.suffix(), { headers: { "X-Auth": Auth.get() } });
+  const r = await fetch("/api/" + path + Auth.suffix(path), { headers: { "X-Auth": Auth.get() } });
   if (r.status === 401) throw new UnauthorizedError();
   if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
   return r.json();
 }
 async function apiPost(path, body = {}) {
-  const r = await fetch("/api/" + path + Auth.suffix(), {
+  const r = await fetch("/api/" + path + Auth.suffix(path), {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Auth": Auth.get() },
     body: JSON.stringify(body),
@@ -193,9 +193,39 @@ const VIEW_TITLES = {
   dashboard: "Дашборд", journal: "Журнал работ", apps: "Приложения и сеть",
   traffic: "Соединения и интерфейсы", diag: "Диагностика сети",
   lan: "Локальная сеть", park: "Парк ПК", infra: "Инфраструктура",
+  mesh: "Меш (P2P)",
   capture: "Захват пакетов",
   security: "Безопасность и IDS", ai: "AI-аналитика", alerts: "Алерты",
   history: "История", settings: "Настройки", sysadmin: "Сисадмин",
+};
+
+/* ---- реестр сервисов P2P для вкладки «Меш» ---- */
+const MESH_SERVICES = {
+  webpanel:  { title: "WebPanel",    desc: "состояние узла и сервисы" },
+  netinfo:   { title: "NetInfo",     desc: "топология решётки" },
+  certstool: { title: "CertsTool",   desc: "сертификаты и CryptoPro" },
+  netpulse:  { title: "NetPulse",    desc: "мост узла к центру :8770" },
+  softinv:   { title: "ПОшки",       desc: "инвентарь ПО и способы удаления" },
+  spawner:   { title: "Spawner",     desc: "системный" },
+  compute:   { title: "Compute",     desc: "системный" },
+  generator: { title: "Generator",   desc: "системный" },
+  test:      { title: "Test",        desc: "тестовый" },
+};
+const MESH_METHODS = {
+  webpanel:  ["node_status", "discover_ui_services"],
+  netinfo:   ["neighbors", "nodes", "services", "find_service"],
+  certstool: ["get_dashboard_data", "list_certificates",
+    "find_certificate_by_subject", "find_certificates_by_subject",
+    "get_certificate_info", "get_cert_sync_digest", "get_install_history",
+    "network_certs", "deploy_certificate", "delete_certificate",
+    "fix_certificate_link", "export_certificate_cer",
+    "export_certificate_pfx", "install_pfx_from_base64", "install_from_node"],
+  netpulse:  ["status", "collect", "alerts", "events", "hosts",
+    "host_detail", "journal", "selftest", "meta", "topology", "map",
+    "l2map", "landevices", "infra", "find_nodes", "peers", "journal_add",
+    "journal_del", "ack", "health_recompute", "set_alias", "runbook",
+    "watchdog_poll", "post", "gather"],
+  softinv:   ["installed_apps", "uninstall_methods", "audit"],
 };
 
 const UI = {
@@ -270,6 +300,7 @@ const UI = {
     if (view === "journal") this.loadJournal();
     if (view === "park") this.loadPark();
     if (view === "infra") { this.loadInfra(); this.loadCustomChecks(); }
+    if (view === "mesh") this.loadMesh();
     if (view === "sysadmin") this.loadSysadmin();
   },
 
@@ -1433,11 +1464,12 @@ const UI = {
       const score = d.health_score ?? 100;
       const color = score >= 80 ? "#22d3a7" : score >= 50 ? "#f5b942" : "#ff5c74";
       const isSelf = !d.ip || ["127.0.0.1", "localhost"].includes(String(d.ip).toLowerCase());
+      const rdpUrl = "/api/rdp?host=" + encodeURIComponent(d.ip || d.name);
       let html =
         `<div style="display:flex;justify-content:space-between;align-items:center">
            <b>${esc(d.name)}</b>
            <span>
-             <a class="btn ghost" href="/api/rdp?host=${encodeURIComponent(d.ip || d.name)}${Auth.suffix()}">RDP</a>
+             <a class="btn ghost" href="${rdpUrl}${Auth.suffix(rdpUrl)}">RDP</a>
              ${isSelf ? "" : `<button class="btn ghost" onclick="UI.wakeCur()">WoL</button>`}
              <button class="btn ghost" onclick="UI.pingCur()">Ping</button>
              <button class="mini-btn" onclick="document.getElementById('park-detail').classList.add('hidden')">✕</button>
@@ -1528,10 +1560,12 @@ const UI = {
     } catch (e) { toast(String(e), true); }
   },
   downloadReport() {
-    location.href = "/journal.txt?days=30" + Auth.suffix();
+    const p = "/journal.txt?days=30";
+    location.href = p + Auth.suffix(p);
   },
   downloadCsv() {
-    location.href = "/journal.csv?days=30" + Auth.suffix();
+    const p = "/journal.csv?days=30";
+    location.href = p + Auth.suffix(p);
   },
 
   /* ---------- софт парка ---------- */
@@ -1811,6 +1845,436 @@ const UI = {
       `<h2>NetPulse — топология сети</h2>${svg}</body></html>`);
     w.document.close();
     setTimeout(() => { w.focus(); w.print(); }, 350);
+  },
+
+  /* ================= Меш (P2P) ================= */
+
+  async p2pCall(service, method, data, node) {
+    const r = await apiPost("p2pcall", {
+      service, method, data: data || {},
+      node: node || $("rpc-node").value || $("mesh-node").value,
+    });
+    if (!r.ok) throw new Error(r.error || "RPC-ошибка");
+    return r.result;
+  },
+
+  async loadMesh() {
+    try {
+      const st = await apiGet("p2pstatus");
+      const box = $("mesh-status");
+      if (!st.ok) { box.innerHTML = `<span class='warn'>${esc(st.error || "мост не готов")}</span>`; return; }
+      const stDot = st.connected
+        ? "<span class='ok-dot'></span><b>соединён</b>"
+        : "<span class='off-dot'></span><b class='warn'>нет связи</b>";
+      box.innerHTML =
+        `<div class="kv"><span>Мост</span>${stDot}</div>` +
+        `<div class="kv"><span>ID моста</span><b>${esc(st.node_id)}</b></div>` +
+        `<div class="kv"><span>Целевая нода</span><b>${esc(st.target_node)}</b></div>` +
+        (st.peer_version ? `<div class="kv"><span>Версия протокола</span><b>${esc(st.peer_version)}</b></div>` : "") +
+        `<div class="kv"><span>URI</span><b class='mono' style='font-size:11px'>${esc(st.uri)}</b></div>` +
+        (st.last_error ? `<div class="kv"><span>Ошибка</span><b class='warn'>${esc(st.last_error)}</b></div>` : "");
+      await this.loadMeshNodes();
+    } catch (e) {
+      if (e instanceof UnauthorizedError) { this.showLogin(); return; }
+      $("mesh-status").innerHTML = `<span class='warn'>${esc(String(e))}</span>`;
+    }
+  },
+
+  async loadMeshNodes() {
+    const sel = $("mesh-node"), rpcSel = $("rpc-node");
+    const prev = sel.value;
+    try {
+      const r = await apiGet("p2pnodes");
+      if (!r.ok) { $("mesh-nodes").innerHTML = `<span class='warn'>${esc(r.error || "нет связи с решёткой")}</span>`; return; }
+      const nodeIds = [r.node_id].concat(
+        (r.connected || []).map(n => n.node_id).filter(id => id && id !== r.node_id));
+      const opts = nodeIds.map(id => `<option value="${esc(id)}">${esc(id)}</option>`).join("");
+      sel.innerHTML = opts; rpcSel.innerHTML = opts;
+      sel.value = (prev && nodeIds.includes(prev)) ? prev : r.node_id;
+      rpcSel.value = sel.value;
+
+      const dots = (r.connected_count ?? 0);
+      $("mesh-nodes").innerHTML =
+        `<div class="kv"><span>Нода</span><b>${esc(r.node_id)}</b></div>` +
+        `<div class="kv"><span>Подключено</span><b>${dots}</b></div>` +
+        `<div class="kv"><span>Известно</span><b>${r.known_count ?? 0}</b></div>` +
+        `<div class="kv"><span>Сервисов локально</span><b>${(r.all_services || []).length}</b></div>`;
+
+      const row = (n, hub) =>
+        `<tr><td><b>${esc(n.node_id || n)}</b>${hub ? " <span class='muted'>(hub)</span>" : ""}</td>` +
+        `<td class='mono'>${esc(n.host || "—")}:${n.port || 0}</td>` +
+        `<td>${hub ? "<span class='ok-dot'></span>активна" : "<span class='ok-dot'></span>подключена"}</td>` +
+        `<td>${esc(n.version || "")}</td>` +
+        `<td class='mono' style='font-size:11px'>${(n.services || []).map(esc).join(", ") || "—"}</td></tr>`;
+      $("mesh-nodes-table").querySelector("tbody").innerHTML =
+        row({ node_id: r.node_id, services: r.all_services || [], host: "localhost", version: "" }, true) +
+        (r.connected || []).map(n => row(n, false)).join("");
+      await this.loadMeshServices();
+      this.rpcFillServices();
+    } catch (e) {
+      if (e instanceof UnauthorizedError) { this.showLogin(); return; }
+      toast(String(e), true);
+    }
+  },
+
+  async loadMeshServices() {
+    const node = $("mesh-node").value, box = $("mesh-services");
+    if (!node) return;
+    try {
+      const r = await apiGet("p2pservices?node=" + encodeURIComponent(node));
+      if (!r.ok) { box.innerHTML = `<span class='warn'>${esc(r.error || "ошибка")}</span>`; return; }
+      const svcs = r.services || [];
+      if (!svcs.length) { box.innerHTML = "<span class='muted'>сервисов нет</span>"; return; }
+      const chips = svcs.map(s => {
+        const meta = MESH_SERVICES[s];
+        const title = meta ? meta.title : s;
+        return `<button class="btn ghost" style="margin:0" title="${esc((meta && meta.desc) || s)}" ` +
+          `onclick="UI.meshPage('${esc(s)}')">${esc(title)}</button>`;
+      }).join("");
+      box.innerHTML = `<div class="chips-row">${chips}</div>` +
+        `<div class="muted" style="margin-top:4px">клик по сервису — готовая страница справа; всё остальное вызывается через консоль ниже</div>`;
+      this.rpcFillServices(svcs);
+    } catch (e) {
+      box.innerHTML = `<span class='warn'>${esc(String(e))}</span>`;
+    }
+  },
+
+  rpcFillServices(svcs) {
+    const sel = $("rpc-service");
+    const list = svcs && svcs.length ? svcs : Object.keys(MESH_SERVICES);
+    sel.innerHTML = list.map(s => {
+      const meta = MESH_SERVICES[s];
+      return `<option value="${esc(s)}">${esc(meta ? meta.title : s)}</option>`;
+    }).join("");
+    this.rpcFillMethods();
+  },
+
+  rpcFillMethods() {
+    const svc = $("rpc-service").value;
+    $("rpc-methods-dl").innerHTML = (MESH_METHODS[svc] || [])
+      .map(m => `<option value="${esc(m)}"></option>`).join("");
+  },
+
+  async rpcCall() {
+    const service = $("rpc-service").value.trim();
+    const method = $("rpc-method").value.trim();
+    if (!service || !method) { toast("укажите сервис и метод", true); return; }
+    let data = {};
+    const raw = $("rpc-data").value.trim();
+    if (raw) {
+      try { data = JSON.parse(raw); }
+      catch (e) { toast("невалидный JSON параметров", true); return; }
+    }
+    const out = $("rpc-result");
+    out.classList.remove("muted"); out.classList.add("warn");
+    out.textContent = `вызов ${service}.${method} …`;
+    try {
+      const res = await this.p2pCall(service, method, data);
+      out.classList.remove("warn");
+      out.textContent = JSON.stringify(res, null, 2);
+    } catch (e) {
+      out.classList.add("warn");
+      out.textContent = String(e);
+    }
+  },
+
+  async meshPage(service) {
+    const node = $("rpc-node").value || $("mesh-node").value;
+    const meta = MESH_SERVICES[service] || { title: service, desc: "" };
+    $("mesh-page-title").innerHTML = `<b>${esc(meta.title)}</b> <span class="hint">${esc(meta.desc)}</span>`;
+    const page = $("mesh-page");
+    page.innerHTML = "загрузка…";
+    const fns = {
+      netinfo:   () => this.meshRenderNetinfo(node),
+      certstool: () => this.meshRenderCerts(node),
+      webpanel:  () => this.meshRenderWebpanel(node),
+      netpulse:  () => this.meshRenderNetpulse(node),
+      softinv:   () => this.meshRenderSoftinv(node),
+    };
+    const fn = fns[service];
+    if (!fn) {
+      page.innerHTML = `<span class='muted'>нет готовой страницы для <b>${esc(service)}</b> — откройте методы в консоли</span>`;
+      return;
+    }
+    try { await fn(); } catch (e) { page.classList.add("warn"); page.textContent = String(e); }
+  },
+
+  async meshRenderNetinfo(node) {
+    const r = await this.p2pCall("netinfo", "neighbors", {}, node);
+    const row = n => `<tr><td><b>${esc(n.node_id || "?")}</b></td>` +
+      `<td class='mono'>${esc(n.host || "—")}:${n.port || 0}</td>` +
+      `<td>${esc(n.status || "—")}</td><td>${esc(n.version || "")}</td>` +
+      `<td class='mono' style='font-size:11px'>${(n.services || []).map(esc).join(", ") || "—"}</td></tr>`;
+    $("mesh-page").innerHTML =
+      `<div class="kv"><span>Нода</span><b>${esc(r.own || node)}</b> · подключено ${(r.connected || []).length}, всего ${(r.all || []).length}</div>` +
+      `<table class="tbl"><thead><tr><th>Нода</th><th>Адрес</th><th>Статус</th><th>Версия</th><th>Сервисы</th></tr></thead>` +
+      `<tbody>${(r.all || []).map(row).join("") || "<tr><td colspan='5' class='muted'>нет соседей</td></tr>"}</tbody></table>` +
+      `<div class="card-title mt18">Поиск сервиса по узлам <span class="hint">netinfo.find_service</span></div>` +
+      `<div class="row inline"><input id="mesh-svc-q" class="inp grow mono" placeholder="например softinv, certstool, webpanel" onkeydown="if(event.key==='Enter')UI.meshFindService('${esc(node)}')">` +
+      `<button class="btn" onclick="UI.meshFindService('${esc(node)}')">Найти</button></div>` +
+      `<div id="mesh-svc-result" class="result-box mono muted" style="white-space:pre-wrap"></div>`;
+  },
+
+  async meshFindService(node) {
+    const q = $("mesh-svc-q").value.trim();
+    if (!q) return;
+    const out = $("mesh-svc-result");
+    out.classList.remove("warn"); out.textContent = "поиск…";
+    try {
+      const r = await this.p2pCall("netinfo", "find_service", { service: q }, node);
+      out.textContent = JSON.stringify(r, null, 2);
+    } catch (e) { out.classList.add("warn"); out.textContent = String(e); }
+  },
+
+  async meshRenderWebpanel(node) {
+    const r = await this.p2pCall("webpanel", "node_status", {}, node);
+    $("mesh-page").innerHTML =
+      `<div class="kv"><span>Нода</span><b>${esc(r.node_id || node)}</b> · адрес ${esc(r.host || "—")}:${r.port || 0}</div>` +
+      `<div class="kv"><span>Подключено</span><b>${r.connected_count ?? 0}</b> · известно ${r.known_count ?? 0}</div>` +
+      `<div class="kv"><span>Сервисы</span><b>${(r.all_services || []).length}</b></div>` +
+      `<div class="chips-row" style="margin-top:8px">${(r.all_services || []).map(s => `<span class="chip OK" style="text-transform:none">${esc(s)}</span>`).join("") || "<span class='muted'>нет сервисов</span>"}</div>`;
+  },
+
+  async meshRenderCerts(node) {
+    const r = await this.p2pCall("certstool", "get_dashboard_data", {}, node);
+    const certs = r.certificates || [];
+    const valid = c => {
+      const m = (c.valid_to || "").match(/[A-Za-z]{3}\s+\w{3}\s+\d{2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}|(\d{2})\.(\d{2})\.(\d{4})/);
+      const s = (c.valid_to || "").match(/(\d{4})[-/.](\d{2})[-/.](\d{2})/);
+      if (!s) return { t: 0, days: null, label: esc(c.valid_to || "—"), cls: "" };
+      const t = +new Date(+s[1], +s[2] - 1, +s[3]);
+      const days = Math.ceil((t - Date.now()) / 86400000);
+      const cls = days < 0 ? "warn" : (days <= 30 ? "" : "");
+      return { t, days, label: esc(c.valid_to || ""), cls };
+    };
+    const row = c => {
+      const d = valid(c);
+      const hasKey = c.container ? "закрытый ключ в контейнере" : "нет ключа в контейнере";
+      return `<tr><td class='mono' style='font-size:11px' title="${esc(c.container || "")}">${esc(c.thumbprint || "—")}</td>` +
+        `<td>${esc(c.subject_cn || c.subject || "—")}<div class='muted' style='font-size:10px'>${esc(c.issuer_cn || "")}</div></td>` +
+        `<td class='mono' style='font-size:11px'>${esc(c.serial || "—")}</td>` +
+        `<td class="${d.cls}">${d.label}${d.days == null ? "" : (d.days < 0 ? " (истёк)" : (d.days <= 30 ? ` (${d.days} дн)` : ""))}</td>` +
+        `<td class='muted' style='font-size:10px'>${hasKey}</td>` +
+        `<td><button class="mini-btn" onclick="UI.meshCertInfo('${esc(node)}','${esc(c.id || "")}')">i</button>` +
+        `<button class="mini-btn" onclick="UI.meshCertDelete('${esc(node)}','${esc(c.thumbprint || "")}','${esc(c.id || "")}')">✕</button></td></tr>`;
+    };
+    $("mesh-page").innerHTML =
+      `<div class="kv"><span>Сертификатов</span><b>${certs.length}${r.total_certificates ? " / " + r.total_certificates : ""}</b>` +
+      `<span class="muted"> · узел ${esc(node)}</span></div>` +
+      (r.error ? `<div class="warn">${esc(r.error)}</div>` : "") +
+      `<table class="tbl"><thead><tr><th>Отпечаток</th><th>Субъект / издатель</th><th>Серийный</th><th>Действует до</th><th>Ключ</th><th></th></tr></thead>` +
+      `<tbody>${(certs.length ? certs.map(row) : "<tr><td colspan='6' class='muted'>нет сертификатов в реестре узла</td></tr>").join("")}</tbody></table>` +
+      `<div class="card-title mt18">Развернуть сертификат <span class="hint">certstool.deploy_certificate — пути на файловом уровне самого узла</span></div>` +
+      `<div class="row inline">` +
+      `<input id="cc-pfx" class="inp mono" placeholder="путь к PFX, например C:\\certs\\1c.pfx">` +
+      `<input id="cc-cer" class="inp mono" placeholder="путь к CER">` +
+      `<input id="cc-pin" class="inp mono" value="00000000" style="width:110px" placeholder="PIN">` +
+      `<button class="btn accent" onclick="UI.meshCertDeploy('${esc(node)}')">Развернуть</button></div>` +
+      `<div id="cc-res" class="result-box mono muted" style="white-space:pre-wrap">—</div>` +
+      `<div class="row" style="margin-top:10px"><button class="btn" onclick="UI.meshRenderCerts('${esc(node)}')"><svg class="ic sm"><use href="#i-refresh"/></svg>Обновить</button></div>`;
+  },
+
+  async meshCertInfo(node, id) {
+    const r = await this.p2pCall("certstool", "get_dashboard_data", {}, node);
+    const c = (r.certificates || []).find(x => x.id === String(id));
+    const box = $("mesh-page");
+    if (!c) { toast("сертификат не найден", true); return; }
+    const rows = Object.entries(c.raw || {}).map(([k, v]) =>
+      `<tr><td class='muted'>${esc(k)}</td><td class='mono' style='font-size:11px;word-break:break-all'>${esc(String(v))}</td></tr>`).join("");
+    box.innerHTML = `<div class="card-title">${esc(c.subject_cn || c.subject || "")} <button class="mini-btn right" onclick="UI.meshRenderCerts('${esc(node)}')">← назад</button></div>` +
+      `<table class="tbl"><tbody>${rows}</tbody></table>`;
+  },
+
+  async meshCertDelete(node, thumbprint, id) {
+    if (!thumbprint) { toast("нет отпечатка для удаления", true); return; }
+    if (!confirm("Удалить сертификат " + thumbprint + " с узла " + node + "?")) return;
+    try {
+      const r = await this.p2pCall("certstool", "delete_certificate", { thumbprint }, node);
+      toast(r.success ? "сертификат удалён" : (r.error || "ошибка удаления"), !r.success);
+      await this.meshRenderCerts(node);
+    } catch (e) { toast(String(e), true); }
+  },
+
+  async meshCertDeploy(node) {
+    const pfx = $("cc-pfx").value.trim(), cer = $("cc-cer").value.trim(), pin = $("cc-pin").value.trim();
+    if (!pfx || !cer) { toast("укажите пути PFX и CER", true); return; }
+    const out = $("cc-res");
+    out.classList.remove("warn"); out.textContent = "разворачивание…";
+    try {
+      const r = await this.p2pCall("certstool", "deploy_certificate", { pfx_path: pfx, cer_path: cer, pin: pin || "00000000" }, node);
+      out.textContent = JSON.stringify(r, null, 2);
+      if (r.success) toast("сертификат развёрнут");
+    } catch (e) { out.classList.add("warn"); out.textContent = String(e); }
+  },
+
+  async meshGlobalSoft() {
+    const box = $("mesh-global-soft");
+    box.innerHTML = "обход узлов…";
+    let nodes = [];
+    try {
+      const n = await apiGet("p2pnodes");
+      nodes = [n.node_id].concat((n.connected || []).map(x => x.node_id));
+    } catch (e) { box.innerHTML = `<span class='warn'>${esc(String(e))}</span>`; return; }
+    const rows = [];
+    for (const node of nodes) {
+      try {
+        const r = await this.p2pCall("softinv", "installed_apps", {}, node);
+        const list = r.apps || [];
+        rows.push({ node, count: list.length, apps: list });
+      } catch (e) { rows.push({ node, count: null, apps: [], err: String(e) }); }
+    }
+    const totals = rows.filter(r => r.count != null);
+    const all = totals.flatMap(r => r.apps);
+    const nameNodeCount = {};
+    const nameVersion = {};
+    const nameQuiet = {};
+    totals.forEach(t => {
+      t.apps.forEach(a => {
+        const k = (a.name || "?").toLowerCase();
+        nameNodeCount[k] = nameNodeCount[k] || new Set();
+        nameNodeCount[k].add(t.node);
+        nameVersion[k] = a.version || "";
+        if (a.quiet_uninstall_string) nameQuiet[k] = true;
+      });
+    });
+    const appsOnAll = all.length && totals.length
+      ? Object.keys(nameNodeCount)
+          .filter(k => nameNodeCount[k].size === totals.length)
+          .map(k => ({ name: k, version: nameVersion[k], count: nameNodeCount[k].size, quiet: nameQuiet[k] ? "да" : "" }))
+      : [];
+    const withQuiet = all.filter(a => a.quiet_uninstall_string).length;
+    const totalsRow = totals.map(t =>
+      `<tr><td><b>${esc(t.node)}</b></td>` +
+      `<td>${t.count == null ? `<span class='warn'>нет softinv</span>` : t.count}</td>` +
+      `<td>${t.apps.filter(a => a.quiet_uninstall_string).length}</td></tr>`).join("");
+    const commonRow = appsOnAll.map(a =>
+      `<tr><td><b>${esc(a.name)}</b></td><td>${esc(a.version || "")}</td><td>${a.count}</td><td>${a.quiet}</td></tr>`).join("");
+    box.innerHTML =
+      `<div class="kv"><span>Узлов опрошено</span><b>${totals.length}</b></div>` +
+      `<table class="tbl"><thead><tr><th>Узел</th><th>Программ</th><th>Тихое удаление</th></tr></thead><tbody>${totalsRow}</tbody></table>` +
+      (appsOnAll.length ?
+        `<div class="card-title mt18">Установлено на всех узлах</div>` +
+        `<table class="tbl"><thead><tr><th>Программа</th><th>Версия</th><th>На узлах</th><th>Тихое</th></tr></thead><tbody>${commonRow}</tbody></table>` : "") +
+      `<div class="muted" style="margin-top:8px">тихих команд удаления суммарно: <b>${withQuiet}</b></div>` +
+      `<div class="row" style="margin-top:8px"><button class="btn" onclick="UI.meshGlobalSoft()">Обновить</button></div>`;
+  },
+
+  async meshAudit() {
+    const box = $("mesh-audit");
+    box.innerHTML = "сбор данных…";
+    const checks = [];
+    const item = (name, ok, note) =>
+      `<div class="kv${ok ? "" : " warn"}"><span class="${ok ? "ok-dot" : "off-dot"}"></span>` +
+      `<b>${esc(name)}</b> &nbsp;<span class="muted">${esc(note)}</span></div>`;
+    try {
+      const st = await apiGet("p2pstatus");
+      const n = await apiGet("p2pnodes");
+      const hub = n.node_id || "—";
+      const connected = (n.connected || []).length;
+
+      // 1. Мост к решётке
+      checks.push(item("Мост подключён", st.connected,
+        st.connected ? `к ${st.target_node} (ws://127.0.0.1:${new URL(st.uri || "").port || 9000})` : st.last_error || "нет связи"));
+
+      // 2. Доступ к решётке — только loopback
+      const loopback = /127\.0\.0\.1|localhost/.test(st.uri || "");
+      checks.push(item("Мост слушает только loopback", loopback,
+        loopback ? `URI: ${st.uri}` : "мост открыт в сеть — рекомендуется 127.0.0.1"));
+
+      // 3. Шифрование трафика решётки
+      checks.push(item("Шифрование канала (TLS/WSS)", false,
+        "ноды решётки работают по незашифрованному ws:// — в доверенной LAN приемлемо, в инете — недопустимо"));
+
+      // 4. Версии протокола
+      const versions = [...new Set((n.connected || []).map(x => x.version || "").filter(Boolean))];
+      checks.push(item("Версии протокола едины", versions.every(v => v === "1.0") && versions.length > 0,
+        versions.join(", ") || "—"));
+
+      // 5. Незнакомые клиенты в таблице
+      const connectedIds = (n.connected || []).map(x => x.node_id);
+      const suspects = connectedIds.filter(id => id && !/node\d|webpanel|hub/i.test(id));
+      checks.push(item("Неизвестных клиентов нет", suspects.length === 0,
+        suspects.length ? ("в таблице: " + suspects.join(", ")) : `подключено: [${connectedIds.join(", ") || "—"}]`));
+
+      // 6. Авторизация веб-портала
+      let authOn = false;
+      try { const w = await apiGet("whoami"); authOn = !!w.auth_enabled; } catch (e) {}
+      checks.push(item("Авторизация веб-портала включена", authOn,
+        authOn ? "токен обязателен" : "web_auth_enabled — включите перед открытием доступа из сети"));
+
+      checks.push(item("ПОшки (softinv) установлены на узлах",
+        (n.connected || []).some(x => (x.services || []).includes("softinv")),
+        "инвентарь ПО доступен через RPC"));
+
+      box.innerHTML = checks.join("") +
+        `<div class="muted" style="margin-top:10px">N-м рекомендаций по усилению: TLS для решётки, авторизация перед публичным доступом, файрвол только на нужные порты (${hub} : 9000).</div>`;
+    } catch (e) {
+      box.innerHTML = `<span class='warn'>${esc(String(e))}</span>`;
+    }
+  },
+
+  async meshRenderNetpulse(node) {
+    const page = $("mesh-page");
+    page.innerHTML = "сбор данных моста…";
+    try {
+      const st = await this.p2pCall("netpulse", "status", {}, node).catch(() => null);
+      let find = null, peers = null;
+      try { find = await this.p2pCall("netpulse", "find_nodes", { service: "netpulse" }, node); } catch (e) {}
+      try { peers = await this.p2pCall("netpulse", "peers", {}, node); } catch (e) {}
+      const rows = [];
+      if (st)
+        rows.push(`<div class="kv"><span>Статус</span><b>${esc(st.status || "")}</b>${st.url ? ` · ${esc(st.url)}` : ""}</div>`);
+      if (find && Array.isArray(find) && find.length)
+        rows.push(`<div class="kv"><span>Узлов с мостом netpulse</span><b>${find.length}</b> · ${find.map(f => esc(f.node_id || f)).join(", ")}</div>`);
+      if (peers && Array.isArray(peers))
+        rows.push(`<div class="kv"><span>Соседи по мосту</span><b>${peers.length}</b></div>`);
+      page.innerHTML = rows.join("") ||
+        `<span class='muted'>нет данных с моста netpulse на узле ${esc(node)}</span>` +
+        `<div class="muted" style="margin-top:8px">методы: status, collect, hosts, journal, map, topology, find_nodes…</div>`;
+    } catch (e) { page.classList.add("warn"); page.textContent = String(e); }
+  },
+
+  async meshRenderSoftinv(node) {
+    const apps = await this.p2pCall("softinv", "installed_apps", {}, node);
+    const list = apps.apps || apps || [];
+    const full = await this.p2pCall("softinv", "audit", {}, node).catch(() => null);
+    const row = a => `<tr><td><b>${esc(a.name || "—")}</b></td>` +
+      `<td>${esc(a.version || "")}</td><td>${esc(a.publisher || "")}</td>` +
+      `<td class='mono' style='font-size:11px'>${a.quiet_uninstall_string ? "<span class='ok'>тихо</span>" : (a.uninstall_string ? "есть" : "—")}</td>` +
+      `<td class='mono' style='font-size:11px'>${a.is_msi ? "MSI" : ""}</td>` +
+      `<td>${a.size_mb ? a.size_mb + " МБ" : "—"}</td>` +
+      `<td><button class="mini-btn" onclick="UI.meshSoftMethods('${esc(node)}','${esc(a.name)}')">как удалить</button></td></tr>`;
+    $("mesh-page").innerHTML =
+      `<div class="kv"><span>Узел</span><b>${esc(node)}</b>` +
+      (full ? ` · программ: <b>${full.total}</b> (с системными), с удалением ${full.with_uninstall}, тихих ${full.with_quiet}, MSI ${full.msi}` : "") +
+      `</div>` +
+      (full && full.biggest && full.biggest.length ?
+        `<div class="kv muted">топ по размеру: ${full.biggest.slice(0, 5).map(b => esc(b.name)).join(", ")}</div>` : "") +
+      `<input class="inp" id="sw-filter" placeholder="фильтр…" style="margin:8px 0" oninput="UI.meshSoftFilter()">` +
+      `<table class="tbl" id="mesh-soft-table"><thead><tr><th>Программа</th><th>Версия</th><th>Издатель</th><th>Тихое удаление</th><th>MSI</th><th>Размер</th><th></th></tr></thead>` +
+      `<tbody>${(list.length ? list : [{ name: "нет данных", version: "", publisher: "", quiet_uninstall_string: "", is_msi: false, size_mb: 0 }]).map(row).join("")}</tbody></table>` +
+      `<div class="row" style="margin-top:10px"><button class="btn" onclick="UI.meshRenderSoftinv('${esc(node)}')"><svg class="ic sm"><use href="#i-refresh"/></svg>Обновить</button></div>`;
+  },
+
+  meshSoftFilter() {
+    const q = ($("sw-filter").value || "").toLowerCase();
+    document.querySelectorAll("#mesh-soft-table tbody tr").forEach(tr => {
+      tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none";
+    });
+  },
+
+  async meshSoftMethods(node, name) {
+    try {
+      const r = await this.p2pCall("softinv", "uninstall_methods", {}, node);
+      const app = (r.apps || []).find(a => a.name === name) || {};
+      const methods = app.methods || [];
+      const rows = methods.map(m =>
+        `<tr><td class='muted'>${esc(m.kind)}</td><td class='mono' style='font-size:11px;word-break:break-all'>${esc(m.command)}</td></tr>`).join("");
+      $("mesh-page").innerHTML =
+        `<div class="card-title">Способы удаления: <b>${esc(name)}</b> <button class="mini-btn right" onclick="UI.meshRenderSoftinv('${esc(node)}')">← назад</button></div>` +
+        (rows ? `<table class="tbl"><thead><tr><th>Тип</th><th>Команда</th></tr></thead><tbody>${rows}</tbody></table>` : `<span class='muted'>не найдено</span>`) +
+        `<div class="muted" style="margin-top:8px">Запуск удаления в UI намеренно не производится — только показан штатный способ, выполните вручную на узле.</div>`;
+    } catch (e) { $("mesh-page").textContent = String(e); }
   },
 };
 

@@ -1,8 +1,9 @@
+# Core dependencies - compatible with Python 3.12+
 customtkinter>=5.2.0
 psutil>=5.9.0
-scikit-learn>=1.0.0
-pandas>=1.3.0
-numpy>=1.21.0
+scikit-learn>=1.3.0
+pandas>=2.1.0
+numpy>=1.24.0
 
-# Опционально - для реального захвата трафика (нужны права администратора):
+# Optional: scapy for network scanning
 # scapy>=2.5.0

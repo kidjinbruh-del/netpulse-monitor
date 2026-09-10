@@ -30,6 +30,7 @@ from core.utils import decode_process_output
 
 from . import __version__
 from .services import MonitorService
+from .mesh import MeshClient, MeshError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -56,18 +57,54 @@ AUTH_FAILS = {}   # ip -> [count, window_start]
 AUTH_BLOCK = {}   # ip -> blocked_until
 AUTH_MAX_FAILS = 5
 AUTH_BLOCK_SEC = 600
+# Публичные эндпоинты: не считаются неудачной авторизацией и не блокируются.
+# whoami/meta — SPA проверяет сессию ДО ввода токена; login — сам вход.
+PUBLIC_ENDPOINTS = {"whoami", "meta", "login"}
 
 
-def _auth_fail(ip):
+def _ip_in_network(ip, network):
+    """Проверка вхождения IP в network вида '192.168.1.0/24' или '10.0.0.1'."""
+    try:
+        if "/" in network:
+            ns, prefix = network.split("/", 1)
+            prefix = int(prefix)
+        else:
+            ns, prefix = network, 32
+        h = int(ip.split(".")[0]) << 24 | int(ip.split(".")[1]) << 16 \
+            | int(ip.split(".")[2]) << 8 | int(ip.split(".")[3])
+        base = int(ns.split(".")[0]) << 24 | int(ns.split(".")[1]) << 16 \
+            | int(ns.split(".")[2]) << 8 | int(ns.split(".")[3])
+        mask = ((1 << prefix) - 1) << (32 - prefix) if 0 < prefix < 32 else (
+            0 if prefix == 0 else 0xFFFFFFFF)
+        return (h & mask) == (base & mask)
+    except Exception:
+        return False
+
+
+def _allowlist_denied(ip, cfg):
+    """True если IP вне разрешённых сетей (ip_allowlist.enabled=true)."""
+    aw = (cfg or {}).get("ip_allowlist") or {}
+    if not aw.get("enabled"):
+        return False
+    nets = aw.get("networks") or []
+    for n in nets:
+        if _ip_in_network(ip, str(n)):
+            return False
+    return True
+
+
+def _auth_fail(ip, path="", method=""):
     now = time.time()
     cnt, t0 = AUTH_FAILS.get(ip, [0, now])
     if now - t0 > AUTH_BLOCK_SEC:
         cnt, t0 = 0, now
     cnt += 1
     AUTH_FAILS[ip] = [cnt, t0]
+    logger.warning(f"[AUTH] fail #{cnt}/{AUTH_MAX_FAILS} ip={ip} {method} {path}")
     if cnt >= AUTH_MAX_FAILS:
         AUTH_BLOCK[ip] = now + AUTH_BLOCK_SEC
         AUTH_FAILS.pop(ip, None)
+        logger.warning(f"[AUTH] BLOCKED ip={ip} for {AUTH_BLOCK_SEC}s")
         return True
     return False
 
@@ -79,6 +116,11 @@ def _auth_blocked(ip):
     if until:
         AUTH_BLOCK.pop(ip, None)
     return 0
+
+
+def _dump_auth_state():
+    """Диагностика: вывести текущее состояние auth-блокировок."""
+    logger.warning(f"[AUTH-DIAG] AUTH_BLOCK={dict(AUTH_BLOCK)} AUTH_FAILS={dict(AUTH_FAILS)}")
 
 
 def reset_auth_state():
@@ -381,6 +423,93 @@ class Api:
         self.backup = backup
         self.tracer = Tracer()
 
+    # ----- P2P mesh (мост в решётку) -----
+
+    def p2p_status(self, q):
+        mesh = getattr(self, "mesh", None)
+        if mesh is None:
+            return {"ok": False, "error": "P2P-мост не создан"}
+        return {"ok": True, **mesh.status}
+
+    def p2p_nodes(self, q):
+        mesh = getattr(self, "mesh", None)
+        if mesh is None:
+            return (503, {"ok": False, "error": "P2P-мост не создан"})
+        if not mesh.connected:
+            return (503, {"ok": False, "error": "нет связи с решёткой",
+                          "detail": mesh.last_error})
+        try:
+            nt = mesh.call("netinfo", "neighbors", {}, dst=mesh.target)
+        except MeshError as e:
+            return (502, {"ok": False, "error": str(e)})
+        connected = (nt or {}).get("connected") or []
+        known = (nt or {}).get("known") or []
+        services = []
+        try:
+            services = mesh.call("netinfo", "services", {}, dst=mesh.target) or []
+        except MeshError:
+            pass
+        st = {
+            "node_id": (nt or {}).get("own") or mesh.target,
+            "connected": connected,
+            "known": known,
+            "all_services": services,
+            "connected_count": len(connected),
+            "known_count": len(known),
+            "bridge": mesh.status,
+        }
+        return {"ok": True, **st}
+
+    def p2p_services(self, q):
+        mesh = getattr(self, "mesh", None)
+        if mesh is None:
+            return (503, {"ok": False, "error": "P2P-мост не создан"})
+        if not mesh.connected:
+            return (503, {"ok": False, "error": "нет связи с решёткой",
+                          "detail": mesh.last_error})
+        node = (q.get("node") or [mesh.target])[0]
+        try:
+            services = mesh.call("netinfo", "services", {}, dst=node) or []
+            node_id = node
+        except MeshError as e:
+            return (502, {"ok": False, "error": str(e)})
+        ui = []
+        by_svc = {}
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=8) as pool:
+            def find(item):
+                svc, i = item
+                try:
+                    hosts = mesh.call("netinfo", "find_service",
+                                      {"service": svc}, dst=node) or []
+                    return svc, [h.get("node_id") for h in hosts if h]
+                except MeshError:
+                    return svc, []
+            for svc, hosts in pool.map(find, [(s, i) for i, s in enumerate(services)]):
+                by_svc[svc] = hosts
+        return {"ok": True, "node": node_id, "services": services,
+                "ui_services": ui, "hosts": by_svc}
+
+    def p2p_call(self, q):
+        body = getattr(self, "_cached_body", None) or {}
+        mesh = getattr(self, "mesh", None)
+        if mesh is None:
+            return (503, {"ok": False, "error": "P2P-мост не создан"})
+        if not mesh.connected:
+            return (503, {"ok": False, "error": "нет связи с решёткой"})
+        service = str(body.get("service") or "").strip()
+        method = str(body.get("method") or "").strip()
+        if not service or not method:
+            return (400, {"ok": False, "error": "нужны service и method"})
+        data = body.get("data")
+        dst = body.get("node") or body.get("dst") or mesh.target
+        try:
+            result = mesh.call(service, method,
+                               data if data is not None else {}, dst=dst)
+            return {"ok": True, "result": result}
+        except MeshError as e:
+            return (502, {"ok": False, "error": str(e)})
+
     # ----- состояние -----
 
     def state(self, q):
@@ -425,8 +554,12 @@ class Api:
         return self.svc.interfaces_info()
 
     def connections(self, q):
-        include_listen = q.get("listening", ["0"])[0] == "1"
-        limit = min(int(q.get("limit", ["150"])[0]), 500)
+        try:
+            include_listen = q.get("listening", ["0"])[0] in ("1", "true", "True")
+            limit = min(int(q.get("limit", ["150"])[0]), 500)
+        except (ValueError, IndexError, TypeError):
+            include_listen = False
+            limit = 150
         conns = self.svc.connections(limit=limit + 50,
                                      include_listening=include_listen)
         if isinstance(conns, dict):
@@ -1453,6 +1586,8 @@ ROUTES_GET = {
     "mtrhistory": "mtr_history_ep",
     "cvestatus": "cve_status", "proxmox": "proxmox_status",
     "reportpdf": "report_pdf",
+    "p2pstatus": "p2p_status", "p2pnodes": "p2p_nodes",
+    "p2pservices": "p2p_services",
 }
 ROUTES_POST = {
     "settings": "settings_post",
@@ -1473,6 +1608,7 @@ ROUTES_POST = {
     "idswl": "ids_wl_add", "customchecksrun": "customchecks_run",
     "l2scan": "l2_scan", "cvescan": "cve_scan",
     "proxmoxpoll": "proxmox_poll", "mtrfan": "mtr_fan",
+    "p2pcall": "p2p_call",
 }
 
 
@@ -1509,15 +1645,14 @@ class Handler(BaseHTTPRequestHandler):
         if cfg.get("web_token"):
             candidates.append(("admin", str(cfg["web_token"]), "admin"))
         if not candidates:
-            return ("admin", "admin")     # auth включён, но токен пуст
+            return None                  # auth включён, но нет ни одного токена — доступ закрыт
         supplied = [self.headers.get("X-Auth", "")]
         cookie = self.headers.get("Cookie", "") or ""
         for cname in ("np_session", "np_token"):
             m = re.search(rf"(?:^|;\s*){cname}=([^\s;]+)", cookie)
             if m:
                 supplied.append(m.group(1))
-        if qs:
-            supplied.append(qs.get("token", [""])[0])
+        # токен в query-строке НЕ принимаем (утечка в логах/referrer)
         for name, tok, role in candidates:
             for s in supplied:
                 if s and hmac.compare_digest(s.encode("utf-8"),
@@ -1533,6 +1668,57 @@ class Handler(BaseHTTPRequestHandler):
 
     def _role(self):
         return getattr(self, "_user_role", "admin") or "admin"
+
+    def _allowed_origins(self):
+        """Список разрешённых CORS-origin'ов.
+        По умолчанию — только собственный origin сервера (same-origin),
+        плюс явный список из конфига web_cors_origins."""
+        origins = set()
+        own = self._own_origin()
+        if own:
+            origins.add(own)
+        for o in (self.api.cfg.get("web_cors_origins") or []):
+            if isinstance(o, str) and o.strip():
+                origins.add(o.strip().rstrip("/"))
+        return origins
+
+    def _own_origin(self):
+        host = self.headers.get("Host") or ""
+        if host:
+            return f"http://{host}".rstrip("/")
+        return None
+
+    def _origin_allowed(self):
+        """Проверка Origin: если заголовок есть и не в allowlist — запрет."""
+        origin = (self.headers.get("Origin") or "").strip().rstrip("/")
+        if not origin:
+            return True
+        return origin in self._allowed_origins()
+
+    def _cors_headers(self):
+        origin = (self.headers.get("Origin") or "").strip().rstrip("/")
+        if origin and origin in self._allowed_origins():
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            if self.headers.get("Access-Control-Request-Headers"):
+                self.send_header(
+                    "Access-Control-Allow-Headers",
+                    "Content-Type, X-Auth")
+            if self.headers.get("Access-Control-Request-Method"):
+                self.send_header(
+                    "Access-Control-Allow-Methods",
+                    "GET, POST, OPTIONS")
+
+    def do_OPTIONS(self):
+        """CORS preflight: разрешаем только из allowlist.
+        Preflight НЕ требует авторизации — браузер шлёт его без куков/токенов."""
+        if not self._origin_allowed():
+            self._send_json({"error": "cors: origin forbidden"}, 403)
+            return
+        self.send_response(204)
+        self._cors_headers()
+        self._sec()
+        self.end_headers()
 
     def _sec(self):
         """Заголовки безопасности на каждый ответ."""
@@ -1552,6 +1738,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        self._cors_headers()
         self._sec()
         self.end_headers()
         self.wfile.write(payload)
@@ -1596,6 +1783,11 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
 
         ip = self.client_address[0]
+        if _allowlist_denied(ip, getattr(self.api, "cfg", None)):
+            logger.warning(f"[ALLOWLIST] GET {path} denied from {ip}")
+            self._send_json({"error": "forbidden: IP вне разрешённых сетей"},
+                            403)
+            return
         wait = _auth_blocked(ip)
         if wait:
             self._send_json(
@@ -1605,15 +1797,28 @@ class Handler(BaseHTTPRequestHandler):
         if (path.startswith("/api/") or path == "/metrics"
                 or path in ("/journal.txt", "/journal.csv", "/report.txt")):
             if not self._authed(qs):
-                just_blocked = _auth_fail(ip)
-                try:
-                    self.api.svc.push_alert(
-                        "AUTH_FAIL",
-                        f"Неудачная авторизация с {ip}" +
-                        (" — IP заблокирован на 10 мин" if just_blocked else ""),
-                        "security", rate=60)
-                except Exception:
-                    pass
+                name = path[len("/api/"):] if path.startswith("/api/") else ""
+                if name not in PUBLIC_ENDPOINTS:
+                    # GET без токена: 401 + alert, НО без накопления блока —
+                    # SPA до входа легитимно делает пачку polling-запросов,
+                    # иначе собственный фронт блокирует loopback (self-DoS).
+                    try:
+                        self.api.svc.push_alert(
+                            "AUTH_FAIL",
+                            f"Неаутентифицированный GET {path} с {ip}",
+                            "security", rate=120)
+                    except Exception:
+                        pass
+                    self._send_json({"error": "unauthorized"}, 401)
+                    return
+                handler_name = ROUTES_GET.get(name)
+                if handler_name:
+                    try:
+                        result = getattr(self.api, handler_name)(qs)
+                        self._send_json(result, 200)
+                    except Exception as e:
+                        self._send_json({"error": str(e)}, 500)
+                    return
                 self._send_json({"error": "unauthorized"}, 401)
                 return
             self.api._cached_actor = getattr(self, "_user", None) or "admin"
@@ -1654,6 +1859,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(result)
             except BrokenPipeError:
                 pass
+            except (ValueError, TypeError, KeyError, IndexError) as e:
+                self._send_json({"error": f"неверный запрос: {e}"}, 400)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
             return
@@ -1815,6 +2022,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         ip = self.client_address[0]
+        if _allowlist_denied(ip, getattr(self.api, "cfg", None)):
+            logger.warning(f"[ALLOWLIST] POST {path} denied from {ip}")
+            self._send_json({"error": "forbidden: IP вне разрешённых сетей"},
+                            403)
+            return
         wait = _auth_blocked(ip)
         if wait:
             self._send_json(
@@ -1825,7 +2037,7 @@ class Handler(BaseHTTPRequestHandler):
         is_login = path == "/api/login"
         if not is_login:
             if not self._authed(qs):
-                just_blocked = _auth_fail(ip)
+                just_blocked = _auth_fail(ip, path, "POST")
                 try:
                     self.api.svc.push_alert(
                         "AUTH_FAIL",
@@ -1841,6 +2053,11 @@ class Handler(BaseHTTPRequestHandler):
             if "application/json" not in ctype:
                 self._send_json(
                     {"error": "нужен Content-Type: application/json"}, 415)
+                return
+            # анти-CSRF: запрет мутаций с чужим Origin (cross-site request)
+            if not self._origin_allowed():
+                self._send_json(
+                    {"error": "csrf: недопустимый Origin"}, 403)
                 return
             # X-Auth обязателен только при включённой авторизации
             if (self.api.cfg.get("web_auth_enabled")
@@ -1885,8 +2102,21 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()
                     self.wfile.write(payload)
+                    # успешный вход сбрасывает счётчик неудач для этого IP
+                    AUTH_FAILS.pop(ip, None)
+                    AUTH_BLOCK.pop(ip, None)
                     return
             self._send_json({"ok": False, "error": "неверный токен"}, 401)
+            # защита от брутфорса логина
+            just_blocked = _auth_fail(ip, path, "LOGIN")
+            try:
+                self.api.svc.push_alert(
+                    "AUTH_FAIL",
+                    f"Неудачный вход в /api/login с {ip}" +
+                    (" — IP заблокирован на 10 мин" if just_blocked else ""),
+                    "security", rate=120)
+            except Exception:
+                pass
             return
 
         handler_name = ROUTES_POST.get(name)
@@ -1915,6 +2145,9 @@ class Handler(BaseHTTPRequestHandler):
                 status_code, payload = 200, result
         except BrokenPipeError:
             return
+        except (ValueError, TypeError, KeyError, IndexError) as e:
+            # невалидный ввод от клиента — внятный 400, а не 500
+            status_code, payload = 400, {"error": f"неверный запрос: {e}"}
         except Exception as e:
             status_code, payload = 500, {"error": str(e)}
         # аудит всех мутаций (append-only) — ДО отправки ответа
@@ -1944,7 +2177,16 @@ class Handler(BaseHTTPRequestHandler):
 
 def build_server(service: MonitorService, config, backup: BackupManager,
                  host="127.0.0.1", port=8770):
-    Handler.api = Api(service, config, backup)
+    api = Api(service, config, backup)
+    try:
+        mesh = MeshClient(config.get("p2p") or {})
+    except Exception as e:
+        logger.warning(f"[mesh] мост не создан: {e}")
+        mesh = None
+    api.mesh = mesh
+    if mesh:
+        mesh.start()
+    Handler.api = api
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
     return httpd
@@ -1964,6 +2206,7 @@ def setup_logging():
 
 
 def run(config):
+    _dump_auth_state()  # диагностика: начальное состояние auth
     service = MonitorService(config)
     backup_mgr = BackupManager(config)
     port = int(config.get("web_port", 8770))
