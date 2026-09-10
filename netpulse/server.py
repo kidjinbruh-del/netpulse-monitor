@@ -17,6 +17,7 @@ import subprocess
 import os
 import sys
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime
@@ -422,6 +423,8 @@ class Api:
         self.cfg = config
         self.backup = backup
         self.tracer = Tracer()
+        self.p2p_metrics_hist = {}   # node_id -> deque([(ts, cpu, mem_pct)])
+        self.p2p_metrics_lock = threading.Lock()
 
     # ----- P2P mesh (мост в решётку) -----
 
@@ -489,6 +492,60 @@ class Api:
                 by_svc[svc] = hosts
         return {"ok": True, "node": node_id, "services": services,
                 "ui_services": ui, "hosts": by_svc}
+
+    def p2p_metrics(self, q):
+        """Тёплая карта меша: CPU/RAM всех нод + история для таймлайна."""
+        mesh = getattr(self, "mesh", None)
+        if mesh is None:
+            return (503, {"ok": False, "error": "P2P-мост не создан"})
+        node_ids = []
+        try:
+            nt = mesh.call("netinfo", "neighbors", {}, dst=mesh.target) or {}
+            own = nt.get("own") or mesh.target
+            node_ids = [own] + [n.get("node_id") for n in (nt.get("connected") or [])
+                                if n.get("node_id") and n.get("node_id") != own]
+        except MeshError:
+            own = mesh.target
+            node_ids = [own]
+        rows = {}
+        errors = {}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            def probe(nid):
+                if nid == own:
+                    vm = psutil.virtual_memory()
+                    return (nid, {
+                        "node_id": nid, "host": "localhost",
+                        "port": self.cfg.get("web_port") or self.cfg.get("port") or 0,
+                        "cpu": psutil.cpu_percent(interval=0.2),
+                        "cpu_count": psutil.cpu_count(),
+                        "mem_pct": round(vm.percent, 1),
+                        "mem_used_gb": round(vm.used / 1073741824, 2),
+                        "mem_total_gb": round(vm.total / 1073741824, 2),
+                        "uptime_sec": int(time.time() - psutil.boot_time()),
+                        "ts": int(time.time()),
+                    })
+                try:
+                    return (nid, mesh.call("netinfo", "metrics", {}, dst=nid, timeout=6))
+                except MeshError as e:
+                    return (nid, {"error": str(e)})
+            for nid, row in pool.map(probe, node_ids):
+                if nid in (None, ""):
+                    continue
+                if row.get("error"):
+                    errors[nid] = row["error"]
+                    continue
+                rows[nid] = row
+        now = int(time.time())
+        with self.p2p_metrics_lock:
+            for nid, r in rows.items():
+                hist = self.p2p_metrics_hist.setdefault(nid, deque(maxlen=300))
+                hist.append((now, r.get("cpu", 0), r.get("mem_pct", 0)))
+        history = {
+            nid: [{"t": t, "cpu": c, "mem": m} for t, c, m in deq]
+            for nid, deq in self.p2p_metrics_hist.items()
+        }
+        return {"ok": True, "now": now, "nodes": rows, "errors": errors,
+                "history": history}
 
     def p2p_call(self, q):
         body = getattr(self, "_cached_body", None) or {}
@@ -1588,6 +1645,7 @@ ROUTES_GET = {
     "reportpdf": "report_pdf",
     "p2pstatus": "p2p_status", "p2pnodes": "p2p_nodes",
     "p2pservices": "p2p_services",
+    "p2pmetrics": "p2p_metrics",
 }
 ROUTES_POST = {
     "settings": "settings_post",

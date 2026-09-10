@@ -24,8 +24,7 @@ DONE_MESH_AUTH = False
 
 def test_mesh_auth_sign_again():
     """Подпись HELLO детерминирована и одна и та же для одной сессии."""
-    sys.path.insert(0, r"C:\Users\ebann\AppData\Local\Temp\opencode\P2P_Core_repo")
-    from src.networking.mesh_auth import sign_hello
+    from netpulse.p2p_core.networking.mesh_auth import sign_hello
     s1 = sign_hello("node0", "sess", "sekret")
     s2 = sign_hello("node0", "sess", "sekret")
     s3 = sign_hello("node0", "sess2", "sekret")
@@ -35,8 +34,7 @@ def test_mesh_auth_sign_again():
 
 
 def test_mesh_auth_verify_matrix():
-    sys.path.insert(0, r"C:\Users\ebann\AppData\Local\Temp\opencode\P2P_Core_repo")
-    from src.networking.mesh_auth import verify_sig, sign_hello
+    from netpulse.p2p_core.networking.mesh_auth import verify_sig, sign_hello
     s = "sekret"
     sig = sign_hello("node0", "sess-1", s)
     assert verify_sig("node0", "sess-1", s, sig) is True
@@ -50,9 +48,7 @@ def test_mesh_auth_verify_matrix():
 
 def test_mesh_auth_cross_compat_with_hub():
     """Подпись hub (netpulse/mesh.py) валидна для P2P_Core verify."""
-    sys.path.insert(0, r"C:\Users\ebann\AppData\Local\Temp\opencode\P2P_Core_repo")
-    from src.networking.mesh_auth import verify_sig
-    sys.path.insert(0, r"C:\сеть пупок")
+    from netpulse.p2p_core.networking.mesh_auth import verify_sig
     import importlib.util
     spec = importlib.util.spec_from_file_location("meshmod", r"C:\сеть пупок\netpulse\mesh.py")
     meshmod = importlib.util.module_from_spec(spec)

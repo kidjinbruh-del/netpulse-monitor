@@ -3,6 +3,8 @@
 import asyncio
 import time
 
+import psutil
+
 from netpulse.p2p_core.internal_modules.base import ModuleGeneric
 from netpulse.p2p_core.networking.neighbor_table import PROTOCOL_VERSION, ROLE_NODE
 from netpulse.p2p_core.services.rpc import rpc
@@ -56,6 +58,24 @@ class NetInfo(ModuleGeneric):
         table   = self.ctx.network.neighbor_table
         found   = table.find_by_service(service)
         return [n.model_dump() for n in found]
+
+    @rpc
+    def metrics(self, data: dict):
+        """Текущие метрики узла: CPU, RAM, аптайм — для тепловой карты меша."""
+        vm = psutil.virtual_memory()
+        boot = psutil.boot_time()
+        return {
+            'node_id':    self.ctx.NODE,
+            'host':       self.ctx.network.local_ip(),
+            'port':       self.ctx.config.network.port,
+            'cpu':        psutil.cpu_percent(interval=0.2),
+            'cpu_count':  psutil.cpu_count(),
+            'mem_pct':    round(vm.percent, 1),
+            'mem_used_gb': round(vm.used / 1073741824, 2),
+            'mem_total_gb': round(vm.total / 1073741824, 2),
+            'uptime_sec': int(time.time() - boot),
+            'ts':         int(time.time()),
+        }
 
     # ------------------------------------------------------------------ #
     #  Карта сети
