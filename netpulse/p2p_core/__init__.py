@@ -1,1 +1,1 @@
-﻿# P2P_Core merged into NetPulse
+# P2P_Core merged into NetPulse

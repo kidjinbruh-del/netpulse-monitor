@@ -2,6 +2,21 @@
 
 Формат: Keep a Changelog. Версии семантические.
 
+## [Unreleased]
+
+### Added
+- **Тёплая карта меша (CPU/RAM)**: RPC `netinfo.metrics` на узлах
+  (CPU%, RAM%, аптайм), hub-эндпоинт `GET /api/p2pmetrics` (опрос всех
+  нод параллельно + кольцевой буфер истории для таймлайна), вкладка
+  Mesh → блок «Тёплая карта меша» с цветовыми ячейками и спарклайнами CPU.
+- **Nmap-сервис**: пакет `netpulse/p2p_core/services/nmap/` — RPC
+  `status`/`ping_sweep`/`ports`/`scan` поверх `nmap.exe`, разбор XML
+  без внешних зависимостей.
+
+### Fixed
+- Тесты `tests/test_p2p_core.py` (50/50) — router, NeighborTable, Pipe,
+  RPC/Executor, SessionTable, протокол, парсеры Nmap.
+
 ## [2.2.0] — 2026-09-11
 
 ### Added

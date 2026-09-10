@@ -1874,9 +1874,69 @@ const UI = {
         `<div class="kv"><span>URI</span><b class='mono' style='font-size:11px'>${esc(st.uri)}</b></div>` +
         (st.last_error ? `<div class="kv"><span>Ошибка</span><b class='warn'>${esc(st.last_error)}</b></div>` : "");
       await this.loadMeshNodes();
+      this.loadMeshHeat();
     } catch (e) {
       if (e instanceof UnauthorizedError) { this.showLogin(); return; }
       $("mesh-status").innerHTML = `<span class='warn'>${esc(String(e))}</span>`;
+    }
+  },
+
+  heatColor(p) {
+    const v = Math.max(0, Math.min(100, p ?? 0));
+    if (v < 50) return `hsl(140 60% ${38 + v * 0.28}%)`;      // зелёный → жёлто-зелёный
+    if (v < 75) return `hsl(${140 - (v - 50) * 3.6} 80% 45%)`; // → оранжевый
+    return `hsl(${58 - (v - 75) * 2.32} 90% 45%)`;            // → красный
+  },
+
+  sparkDims(id, values, color) {
+    const cv = $(id);
+    if (!cv || !values || values.length < 2) { if (cv) { const { ctx, w, h } = prepCanvas(cv); ctx.clearRect(0, 0, w, h); } return null; }
+    const { ctx, w, h } = prepCanvas(cv);
+    ctx.clearRect(0, 0, w, h);
+    const max = Math.max(...values, 1);
+    const step = w / (values.length - 1);
+    ctx.beginPath();
+    values.forEach((v, i) => {
+      const x = i * step, y = h - 2 - (v / max) * (h - 5);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+  },
+
+  async loadMeshHeat() {
+    const box = $("mesh-heat");
+    try {
+      const r = await apiGet("p2pmetrics");
+      if (!r.ok) { box.innerHTML = `<span class='warn'>${esc(r.error || "ошибка")}</span>`; return; }
+      const nodes = r.nodes || {};
+      const errs = r.errors || {};
+      const hist = r.history || {};
+      const list = Object.entries(nodes);
+      if (!list.length) { box.innerHTML = "<span class='muted'>нет данных с нод</span>"; return; }
+      const cell = ([id, m]) => {
+        const cpu = m.cpu ?? 0, mem = m.mem_pct ?? 0;
+        const cpuHist = (hist[id] || []).map(p => p.cpu);
+        const memHist = (hist[id] || []).map(p => p.mem);
+        return `<div class="heat-cell" style="background:linear-gradient(160deg,${this.heatColor(cpu)},${this.heatColor(mem)})">` +
+          `<div class="heat-name" title="${esc(m.host || "")}:${m.port ?? ""}">${esc(id)}</div>` +
+          `<div class="heat-body"><div>CPU <b>${cpu.toFixed?.(0) ?? cpu}%</b></div>` +
+          `<div>RAM <b>${mem}%</b> <span class="muted">${m.mem_used_gb ?? "?"}/${m.mem_total_gb ?? "?"}ГБ</span></div></div>` +
+          `<canvas id="spark-${esc(id)}" class="spark"></canvas></div>`;
+      };
+      box.innerHTML = list.map(cell).join("") +
+        `<div class="heat-legend"><span style="background:${this.heatColor(10)}"></span><span>~0%</span>` +
+        `<span style="background:${this.heatColor(55)}"></span><span>~55%</span>` +
+        `<span style="background:${this.heatColor(90)}"></span><span>~90%</span></div>`;
+      list.forEach(([id, m]) => {
+        this.sparkDims("spark-" + id, (hist[id] || []).map(p => p.cpu), cssVar("--violet"));
+      });
+      if (Object.keys(errs).length) {
+        box.innerHTML += "<div class='muted' style='margin-top:6px'>нет ответа от:" +
+          Object.entries(errs).map(([k, v]) => ` <b>${esc(k)}</b> <span class='warn'>${esc(v)}</span>`).join(";") + "</div>";
+      }
+    } catch (e) {
+      if (e instanceof UnauthorizedError) { this.showLogin(); return; }
+      box.innerHTML = `<span class='warn'>${esc(String(e))}</span>`;
     }
   },
 
