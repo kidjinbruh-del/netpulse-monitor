@@ -159,10 +159,13 @@ class NetInfo(ModuleGeneric):
 
         # ---- рекурсивный обход connected соседей-узлов ----
         errors = {}
+        svc_sets = {row['node_id']: set(row.get('services') or [])
+                    for row in net.local_sessions()}
         targets = [
             n for n in net.neighbor_table.connected()
             if getattr(n, 'role', ROLE_NODE) == ROLE_NODE
             and n.node_id not in visited
+            and 'netinfo' in svc_sets.get(n.node_id, ())
         ]
         if targets and ttl > 1:
             results = await asyncio.gather(
@@ -205,10 +208,21 @@ class NetInfo(ModuleGeneric):
         edge_rows = []
         for e in edges.values():
             rep = e['reported_by']
+            src, dst = e['src'], e['dst']
+
+            def _is_bridge(nid):            # узел без сервиса netinfo — мост,
+                info = nodes.get(nid) or {} # его рёбра опросить нельзя
+                return 'netinfo' not in (info.get('services') or [])
+
+            src_bridge = _is_bridge(src)
+            dst_bridge = _is_bridge(dst)
+            both_report = src in rep and dst in rep
+            verified = both_report or (src in rep and dst_bridge) \
+                or (dst in rep and src_bridge)
             edge_rows.append({
-                'src':         e['src'],
-                'dst':         e['dst'],
-                'verified':    e['src'] in rep and e['dst'] in rep,
+                'src':         src,
+                'dst':         dst,
+                'verified':    bool(verified),
                 'reported_by': sorted(rep),
             })
         edge_rows.sort(key=lambda x: (x['src'], x['dst']))

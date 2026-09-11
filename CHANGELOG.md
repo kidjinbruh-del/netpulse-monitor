@@ -16,10 +16,26 @@
   animate-рендер графа (SVG, чистый JS, force-simulation) по RPC
   `netinfo.topology`, клик по узлу открывает панель деталей
   (статус, host:port, версия, сервисы, число связей).
+- **Мультитаргет-мост `MeshHub`**: hub держит независимый WebSocket
+  к каждой ноде из `p2p.targets` (агрегированные `status`/`call`, `links`
+  в `/api/p2pstatus`) — полная mesh-связность hub↔node0, hub↔node1.
+- **Единый лаунчер решётки `start_all.ps1`**: запуск из одного файла с
+  правами администратора (UAC-самоподъём) — останавливает процессы на
+  портах 9000/9001/8771, поднимает node0/node1 через `node_runner
+  --workdir mesh\node*` и hub, логи в `logs\`, ожидание портов,
+  `-Open` открывает веб-панель.
+- **Стабильные конфиги нод**: `mesh/node0/config.yaml`,
+  `mesh/node1/config.yaml` — чистые P2P-peers node0↔node1.
 
 ### Fixed
 - Тесты `tests/test_p2p_core.py` (50/50) — router, NeighborTable, Pipe,
   RPC/Executor, SessionTable, протокол, парсеры Nmap.
+- **Топология: узлы без сервиса `netinfo`** (мост/hub-клиент) больше не
+  опрашиваются в BFS-обходе `netinfo.topology` — рёбра подтверждаются
+  одной стороной (bridge-подтверждение), нет RPC-таймаутов и срыва
+  verified-статуса связей между полными узлами.
+- **Force-simulation топологии**: узлы не перекрываются и не «рябят» —
+  расталкивание всех пар узлов + порог остановки таймера 0.3.
 
 ## [2.2.0] — 2026-09-11
 

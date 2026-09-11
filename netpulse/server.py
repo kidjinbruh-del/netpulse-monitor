@@ -31,7 +31,7 @@ from core.utils import decode_process_output
 
 from . import __version__
 from .services import MonitorService
-from .mesh import MeshClient, MeshError
+from .mesh import MeshClient, MeshError, MeshHub
 import logging
 
 logger = logging.getLogger(__name__)
@@ -2237,7 +2237,11 @@ def build_server(service: MonitorService, config, backup: BackupManager,
                  host="127.0.0.1", port=8770):
     api = Api(service, config, backup)
     try:
-        mesh = MeshClient(config.get("p2p") or {})
+        p2p_cfg = config.get("p2p") or {}
+        if p2p_cfg.get("targets"):
+            mesh = MeshHub(p2p_cfg)
+        else:
+            mesh = MeshClient(p2p_cfg)
     except Exception as e:
         logger.warning(f"[mesh] мост не создан: {e}")
         mesh = None

@@ -40,6 +40,90 @@ class MeshError(Exception):
     pass
 
 
+class MeshHub:
+    """Мульти-таргет мост: держит по одному MeshClient на узел решётки.
+
+    Конфиг: те же поля P2P + targets: [{node_id, port}]. Если targets не
+    заданы — один клиент (поведение как у старого MeshClient).
+    """
+
+    def __init__(self, cfg):
+        base = dict(cfg)
+        targets = cfg.get("targets") or []
+        if not targets:
+            targets = [{"node_id": cfg.get("target_node"),
+                        "port": cfg.get("port")}]
+        self.enabled = bool(cfg.get("enabled", True))
+        self.node_id = str(cfg.get("node_id") or "NetPulseHub")
+        self.clients = []
+        for t in targets:
+            c = dict(base)
+            c["target_node"] = t.get("node_id") or cfg.get("target_node")
+            c["port"] = t.get("port") or cfg.get("port")
+            self.clients.append(MeshClient(c))
+        self.target = self.clients[0].target if self.clients else ""
+        self._stop = threading.Event()
+
+    def start(self):
+        if not self.enabled:
+            return
+        for c in self.clients:
+            c.start()
+
+    def stop(self):
+        for c in self.clients:
+            c.stop()
+
+    @property
+    def connected(self):
+        return any(c.connected for c in self.clients)
+
+    def _pick(self, dst):
+        if dst:
+            for c in self.clients:
+                if c.target.lower() == str(dst).lower():
+                    return c
+        for c in self.clients:
+            if c.connected:
+                return c
+        return self.clients[0] if self.clients else None
+
+    def call(self, service, method, data=None, dst=None, timeout=None):
+        c = self._pick(dst)
+        if c is None:
+            raise MeshError("нет связи с ядром решётки (мост отключён)")
+        return c.call(service, method, data, dst=dst or c.target,
+                      timeout=timeout or None)
+
+    @property
+    def status(self):
+        links = [c.status for c in self.clients]
+        nodes = []
+        services = []
+        for s in links:
+            for n in (s.get("nodes") or []):
+                if n not in nodes:
+                    nodes.append(n)
+            for srv in (s.get("services") or []):
+                if srv not in services:
+                    services.append(srv)
+        conn = any(s.get("connected") for s in links)
+        errs = [s.get("last_error") for s in links if s.get("last_error")]
+        return {
+            "enabled": self.enabled,
+            "connected": conn,
+            "node_id": self.node_id,
+            "target_node": ", ".join(c.target for c in self.clients),
+            "uri": "; ".join(s.get("uri") for s in links),
+            "peer_version": next((s.get("peer_version") for s in links
+                                  if s.get("peer_version")), ""),
+            "last_error": " | ".join(dict.fromkeys(errs))[:400],
+            "nodes": nodes,
+            "services": services,
+            "links": links,
+        }
+
+
 class _WS:
     """Минимальный WebSocket-клиент (RFC6455), текстовые фреймы вручную."""
 
