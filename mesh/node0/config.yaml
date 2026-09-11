@@ -1,0 +1,65 @@
+node: node0
+network:
+  host: 0.0.0.0
+  port: 9000
+  ip_ttl_sec: 60
+memory:
+  default_buff: 10
+logging:
+  level: INFO
+  uvicorn_level: WARNING
+  websockets_level: WARNING
+logs:
+  buffer_size: 2000
+  max_msg_len: 4000
+  max_traceback_len: 2000
+files:
+  shares: []
+  download_dir: downloads
+  max_chunk: 4194304
+update:
+  enabled: true
+  sources: []
+  auto_check: true
+  check_interval_min: 60
+  auto_apply: false
+  require_signed: true
+  allow_downgrade: false
+  health_confirm_sec: 90
+purge:
+  enabled: true
+eyesauron:
+  enabled: false
+  collect: true
+  capture: false
+  store_path: \\192.168.53.21\photo\screens
+  collector_node: ''
+  interval_sec: 5.0
+  send_delay_sec: 0.5
+  max_spool_mb: 500
+  store:
+    enabled: false
+    root: \\192.168.53.21\photo\store\packs
+    volume_size_gb: 10
+    local_cache_gb: 100
+    max_age_hours: 24.0
+    bloom_enabled: false
+webpanel:
+  auth:
+    enabled: true
+    users: {}
+services:
+  path: services
+local:
+  alias: node0-host
+  name: node0-peer
+  exe_name: Node_P2P_Core.exe
+  secret: mesh-shared-secret-2026
+  work_dir: C:\Core
+  full_path: C:\Core\Node_P2P_Core.exe
+  excluded_autoload_services:
+  - webpanel
+  peers:
+  - node_id: node1
+    uri: ws://127.0.0.1:9001/ws/
+config_confirm_sec: 15
