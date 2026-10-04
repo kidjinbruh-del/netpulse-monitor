@@ -1,8 +1,8 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-2.2.0-blue)
-![Python](https://img.shields.io/badge/python-3.12%2B-informational)
-![Tests](https://img.shields.io/badge/tests-28%2F28-success)
+![Version](https://img.shields.io/badge/version-3.0.0-blue)
+![Python](https://img.shields.io/badge/python-3.11%2B-informational)
+![Tests](https://img.shields.io/badge/tests-130%2F130-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
@@ -81,41 +81,53 @@ Prometheus `/metrics` • SSE-стрим живого состояния • а�
      │  SSE + REST (токен)                          │
      ▼                                              │ GPO-скрипт (отчёт о ПО)
 ┌─────────────────────────────────────┐             │
-│  HTTP-сервер (stdlib, порт 8770)    │◀────────────┘
-│  ├ REST API · SSE · Prometheus      │
-│  ├ Аутентификация · rate-limit      │
+│  FastAPI + uvicorn (порт 8770)      │◀────────────┘
+│  ├ роуты по доменам (server/routes) │
+│  ├ middleware: auth, CORS, rate-    │
+│  │  limit, audit, request-id        │
+│  └ SSE · Prometheus · шаблоны Jinja │
 └──────────────┬──────────────────────┘
                ▼
 ┌─────────────────────────────────────┐        Удалённые устройства
-│  MonitorService (фоновые потоки)    │      ┌────────────────────┐
-│  ├ трафик, пинг, IDS, квоты         │─────▶│ ПК парка (WinRM)   │
-│  ├ Сторож ПК · Инфраструктура (SNMP)│─────▶│ Роутеры/свитчи     │
-│  ├ Журнал · Планировщик · Сторожа   │      └────────────────────┘
+│  AppContext (конфиг, БД, логирование,│
+│  жизненный цикл сервисов)            │      ┌────────────────────┐
+│  ├ netpulse/services/ — по одному    │─────▶│ ПК парка (WinRM)   │
+│  │  модулю на файл (Start/Stop)      │─────▶│ Роутеры/свитчи     │
+│  ├ трафик, пинг, IDS, квоты         │      └────────────────────┘
+│  ├ Сторож ПК · Инфраструктура (SNMP)│
+│  ├ Журнал · Планировщик · Mesh      │
 └──────────────┬──────────────────────┘
                ▼
         SQLite (WAL) — единое хранилище
 ```
 
 Модули изолированы: каждый владеет своими таблицами БД, фоновые циклы
-останавливаются через общий event.
+останавливаются через общий event. Сервисы регистрируются в `AppContext`
+на старте и гасятся в обратном порядке при остановке.
 
 ---
 
 ## 3. Быстрый старт
 
-**Требования:** Windows 10/11, Python 3.12+, права администратора (для полного
+**Требования:** Windows 10/11, Python 3.11+, права администратора (для полного
 функционала).
 
 ```bash
-pip install psutil                # единственная зависимость веб-версии
-python -m netpulse                # дашборд: http://127.0.0.1:8770
+pip install -e ".[dev]"            # зависимости из pyproject.toml
+python -m netpulse                 # дашборд: http://127.0.0.1:8770
+python -m netpulse --port 8771     # другой порт
 ```
 
-Десктоп-версия (альтернативный UI, legacy):
+Веб-слой — FastAPI на uvicorn. Своя десктопная оболочка на CustomTkinter
+удалена в версии 3.0: две оболочки одного кода разъезжались, а веб-дашборд
+покрывает её функции. Планировщик Windows и `start_netpulse.ps1` работают
+как раньше.
+
+**Проверки:**
 
 ```bash
-pip install -r requirements.txt
-python main.py
+python -m pytest -q                # 130 тестов, ~4 секунды
+python -m ruff check .             # стиль
 ```
 
 **Автозапуск с правами администратора:**

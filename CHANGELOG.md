@@ -2,6 +2,41 @@
 
 Формат: Keep a Changelog. Версии семантические.
 
+## [3.0.0]
+
+### Changed
+- **Веб-сервер переписан на FastAPI**: `http.server` заменён на
+  FastAPI + uvicorn, `netpulse/server.py` распался на пакет
+  `netpulse/server/` — роуты по доменам (`routes/`), middleware
+  (`auth`, `cors`, `rate_limit`, `audit`, `request_id`, `security`),
+  схемы (`schemas/`) и зависимости (`dependencies/`).
+- **`AppContext` вместо разрозненных глобальных объектов**: конфигурация,
+  БД, логирование и жизненный цикл сервисов живут в одном контексте;
+  на старте сервисы поднимаются, при остановке гасятся в обратном порядке.
+- **Разбивка по пакетам**: `netpulse/config`, `netpulse/db`,
+  `netpulse/logging`, `netpulse/monitor`, `netpulse/services`.
+- **Тесты на pytest**: `tests/unit` и `tests/integration`, свой
+  `conftest.py`, 130 тестов. Раннер на самописном `unittest`-стиле ушёл.
+- **Версия в одном месте**: `netpulse.__version__`, `pyproject.toml`
+  читает её оттуда (было расхождение 1.9.0 против 3.0.0 в логах).
+- `pyproject.toml` вместо ручного `requirements.txt`: зависимости,
+  `ruff`, `mypy`, dev-extra.
+
+### Removed
+- **Десктопная оболочка на CustomTkinter** (`ui/`, `main.py`) и её
+  тесты. Две оболочки одного кода разъезжались; веб-дашборд покрывает
+  нужные функции. Если десктопный режим снова понадобится — отдельная
+  оболочка поверх API, а не копия логики.
+
+### Fixed
+- Остановка сервера чистая: сервисы гасятся до закрытия БД, uvicorn
+  завершает приложение без зависших потоков.
+
+### Проверено
+- `python -m netpulse` поднимается, `/api/meta` отвечает 200,
+  `/api/selftest` требует токен (аутентификация включена).
+- `python -m pytest -q` — 130 passed.
+
 ## [Unreleased]
 
 ### Added
