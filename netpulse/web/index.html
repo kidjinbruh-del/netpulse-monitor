@@ -106,9 +106,11 @@
       <div class="stat-grid four">
         <div class="card stat"><div class="stat-label"><svg class="ic sm"><use href="#i-down"/></svg>Загрузка</div>
           <div class="stat-value accent-cyan" id="st-down">0<span class="unit"> KB/s</span></div>
+          <div class="stat-meter"><div class="stat-bar"><i id="bar-down"></i></div><span class="stat-pct" id="bar-down-pct"></span></div>
           <canvas class="spark" id="spark-down"></canvas></div>
-        <div class="card stat"><div class="stat-label"><svg class="ic sm"><use href="#i-up"/></svg>Отдача</div>
+        <div class="card stat stat-card-up"><div class="stat-label"><svg class="ic sm"><use href="#i-up"/></svg>Отдача</div>
           <div class="stat-value accent-violet" id="st-up">0<span class="unit"> KB/s</span></div>
+          <div class="stat-meter"><div class="stat-bar"><i id="bar-up"></i></div><span class="stat-pct" id="bar-up-pct"></span></div>
           <canvas class="spark" id="spark-up"></canvas></div>
         <div class="card stat"><div class="stat-label">Пинг / потери</div>
           <div class="stat-value" id="st-ping">—<span class="unit"> ms</span></div>
@@ -122,17 +124,17 @@
       <div class="grid-2-1">
         <div class="card chart-card">
           <div class="card-title">Трафик в реальном времени
-            <span class="legend"><i class="lg lg-down"></i>загрузка<i class="lg lg-up"></i>отдача
+            <span class="legend"><i class="lg lg-down"></i>загрузка<i class="lg lg-up"></i>отдача<i class="lg lg-avg"></i>среднее<i class="lg lg-alert"></i>алерты
               <em id="fc-note" class="forecast-note hidden"></em></span></div>
           <canvas id="chart-main" height="250"></canvas>
         </div>
         <div class="card session-card">
           <div class="card-title">Сессия</div>
           <div class="session-grid">
-            <div><span>Получено</span><b id="ss-total-down">0 MB</b></div>
-            <div><span>Отправлено</span><b id="ss-total-up">0 MB</b></div>
-            <div><span>Пик скорости</span><b id="ss-max">0 KB/s</b></div>
-            <div><span>Аптайм</span><b id="ss-uptime">0с</b></div>
+            <div class="ss-card ss-down"><span>Получено</span><b id="ss-total-down">0 MB</b></div>
+            <div class="ss-card ss-up"><span>Отправлено</span><b id="ss-total-up">0 MB</b></div>
+            <div class="ss-card ss-peak"><span>Пик скорости</span><b id="ss-max">0 KB/s</b></div>
+            <div class="ss-card ss-uptime"><span>Аптайм</span><b id="ss-uptime">0с</b></div>
           </div>
           <div class="card-title mt18">Прогноз AI</div>
           <div id="dash-forecast" class="kv muted">собираем данные…</div>

@@ -146,10 +146,52 @@ nav { padding: 4px 10px; flex: 1; overflow-y: auto; }
 .quota-bar i { display: block; height: 100%; background: var(--cyan); border-radius: 4px; transition: width .4s; }
 .quota-bar i.warn { background: var(--amber); } .quota-bar i.over { background: var(--danger); }
 
+/* ---------- метры в верхних stat-карточках ---------- */
+.stat-meter { display: flex; align-items: center; gap: 8px; margin: 9px 0 38px; }
+.stat-bar { flex: 1; height: 7px; border-radius: 4px; background: var(--panel2);
+            overflow: hidden; border: 1px solid var(--border-soft); }
+.stat-bar i { display: block; height: 100%; width: 0; border-radius: 4px;
+              background: var(--cyan); transition: width .4s; }
+.stat-bar i.warn { background: var(--amber); } .stat-bar i.over { background: var(--danger); }
+.stat-card-up .stat-bar i { background: var(--violet); }
+.stat-card-up .stat-bar i.warn { background: var(--amber); }
+.stat-card-up .stat-bar i.over { background: var(--danger); }
+.stat-pct { font-size: 11px; color: var(--muted); min-width: 36px; text-align: right;
+            font-variant-numeric: tabular-nums; }
+.stat-value.st-warn { color: var(--amber); } .stat-value.st-over { color: var(--danger); }
+
+/* ---------- карточки сессии 2x2 ---------- */
+.ss-card { background: var(--panel2); border: 1px solid var(--border-soft);
+           border-radius: 10px; padding: 10px 12px; border-top: 3px solid var(--muted); }
+.ss-card span { display: block; font-size: 10.5px; color: var(--muted);
+                letter-spacing: .04em; text-transform: uppercase; }
+.ss-card b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.ss-down { border-top-color: var(--cyan); } .ss-down b { color: var(--cyan); }
+.ss-up { border-top-color: var(--violet); } .ss-up b { color: var(--violet); }
+.ss-peak { border-top-color: var(--amber); } .ss-peak b { color: var(--amber); }
+.ss-uptime { border-top-color: var(--accent); }
+
+/* ---------- мини-таблица парка на дашборде ---------- */
+.dash-park { width: 100%; border-collapse: collapse; font-size: 12px; margin: 2px 0 6px; }
+.dash-park td { padding: 5px 4px; border-bottom: 1px solid var(--border-soft); }
+.dash-park tr:last-child td { border-bottom: none; }
+.dash-park .mono { font-size: 11px; }
+.st-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; }
+.st-dot.ok { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+.st-dot.warn { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.st-dot.bad { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+.st-tag { font-size: 10px; font-weight: 700; letter-spacing: .05em; }
+.st-tag.ok { color: var(--cyan); } .st-tag.warn { color: var(--amber); } .st-tag.bad { color: var(--danger); }
+
+/* ---------- прогресс прогноза AI ---------- */
+.ai-progress { margin-top: 2px; }
+.ai-progress .quota-bar { margin: 7px 0 5px; }
+
 .legend { font-weight: 400; font-size: 11.5px; color: var(--muted); margin-left: auto;
           display: inline-flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .lg { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 5px; }
 .lg-down { background: var(--cyan); } .lg-up { background: var(--violet); }
+.lg-avg { background: var(--amber); } .lg-alert { background: var(--danger); }
 .forecast-note { font-style: normal; color: var(--amber); }
 
 .chart-card canvas { width: 100%; display: block; }

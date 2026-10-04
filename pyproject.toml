@@ -1,0 +1,47 @@
+[project]
+name = "netpulse"
+description = "Network monitoring + P2P mesh + IT department platform"
+readme = "README.md"
+requires-python = ">=3.11"
+# Версия берётся из netpulse/__init__.py: вторая копия в pyproject уже
+# расходилась с той, что печатают логи и /api/meta.
+dynamic = ["version"]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "jinja2>=3.1.0",
+    "prometheus-client>=0.20.0",
+    "python-json-logger>=2.0.0",
+    "psutil>=6.0.0",
+    "sse-starlette>=2.1.0",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6.0.0",
+]
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.6.0",
+    "mypy>=1.10.0",
+    "httpx>=0.27.0",
+]
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "T20"]
+ignore = ["S101", "T201"]
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+[tool.setuptools.dynamic]
+version = { attr = "netpulse.__version__" }
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"

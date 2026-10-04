@@ -1,16 +1,20 @@
-"""
-Geo-резолвер для публичных IP (карта атак).
+"""Geo-резолвер для публичных IP (карта атак).
 
 Без внешних библиотек: локальная таблица префиксов IPv4 -> страна.
 Покрытие базовых ЧВД: RU, UA, DE, US, NL, CN, IR, KP, BR, IN, FR, GB,
 плюс приватные/зарезервированные диапазоны -> локальные/служебные.
 Подходит для агрегированной статистики источников атак, а не точной
 геолокации. Расширяется правкой ATTACK_PREFIXES.
+
+v3-реализация: те же функции, типизировано, без глобального состояния.
 """
+from __future__ import annotations
 
 import ipaddress
 import logging
 import re
+from collections import Counter
+from typing import Dict, Iterable, List, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -48,50 +52,46 @@ _CC_MAP = {
     "TH": "Таиланд", "ID": "Индонезия", "EG": "Египет", "PK": "Пакистан",
 }
 
-_network_cache_layer = []
+_IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
-def _build_nets():
-    global _network_cache_layer
-    if _network_cache_layer:
-        return
-    for net, cc in PRIVATE.items():
-        _network_cache_layer.append((ipaddress.ip_network(net), _CC_MAP.get(cc, cc)))
-    for net, cc in ATTACK_PREFIXES:
-        name = _CC_MAP.get(cc, cc)
-        _network_cache_layer.append((ipaddress.ip_network(net), name))
-
-
-def country(ip: str):
-    """Страна для IP (строка). '?' если не определена."""
-    if not ip or not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
-        return "?"
+def _parse_ip(ip: str):
+    """IPv4-адрес или None."""
+    if not ip or not _IPV4_RE.match(ip):
+        return None
     try:
-        addr = ipaddress.ip_address(ip)
+        return ipaddress.ip_address(ip)
     except ValueError:
+        return None
+
+
+def country(ip: str) -> str:
+    """Страна для IP (строка). '?' если не определена."""
+    addr = _parse_ip(ip)
+    if addr is None:
         return "?"
     for net, name in PRIVATE.items():
-        if ipaddress.ip_address(ip) in ipaddress.ip_network(net):
+        if addr in ipaddress.ip_network(net):
             return name
-    # попытка точного вхождения в ATTACK_PREFIXES
     for net, cc in ATTACK_PREFIXES:
-        if ipaddress.ip_address(ip) in ipaddress.ip_network(net):
+        if addr in ipaddress.ip_network(net):
             return _CC_MAP.get(cc, cc)
-    # generic: по первым октетам из локальной статистики здесь пусто
     return "?"
 
 
-def top_countries(ips_sources):
+def top_countries(
+    ips_sources: Iterable[Union[str, Dict[str, str]]],
+    limit: int = 20,
+) -> List[Tuple[str, int]]:
     """Счётчик стран по списку {'ip': ...} или списку строк."""
-    from collections import Counter
-    cnt = Counter()
+    cnt: Counter = Counter()
     for src in ips_sources:
         ip = src.get("ip") if isinstance(src, dict) else src
         cnt[country(str(ip))] += 1
-    return cnt.most_common(20)
+    return cnt.most_common(limit)
 
 
-def flag(cc: str):
+def flag(cc: str) -> str:
     """Эмодзи-флаг/символ по названию страны."""
     if cc in ("Локальная сеть", "Служебная", "NAT/CGN", "Мультикаст"):
         return "●"

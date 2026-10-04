@@ -1,16 +1,19 @@
-"""
-Шифрование секретов конфига через Windows DPAPI.
+"""Шифрование секретов конфига через Windows DPAPI.
 
 Значения секретных ключей (web_token, telegram.token, web_admins[].token)
 при сохранении конфига автоматически шифруются и получают префикс "dpapi:",
 при загрузке — расшифровываются. Привязка: пользователь + машина, ключей
 нигде не хранится. Скопированный на другую машину config.json секреты
 раскрыть не сможет.
+
+v3-реализация: те же функции, типизировано.
 """
+from __future__ import annotations
 
 import base64
 import ctypes
 import sys
+from typing import Any, Optional
 
 PREFIX = "dpapi:"
 
@@ -27,7 +30,7 @@ def _crypt(data: bytes, protect: bool) -> bytes:
         raise OSError("DPAPI доступен только на Windows")
     crypt32 = ctypes.windll.crypt32
     kernel32 = ctypes.windll.kernel32
-    # точные прототипы: иначе 64-битные указатели обрезаются до int
+    # Точные прототипы: иначе 64-битные указатели обрезаются до int.
     crypt32.CryptProtectData.argtypes = [
         ctypes.POINTER(_DATA_BLOB), ctypes.c_wchar_p, ctypes.c_void_p,
         ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
@@ -42,23 +45,25 @@ def _crypt(data: bytes, protect: bool) -> bytes:
     kernel32.LocalFree.restype = ctypes.c_void_p
 
     buf = ctypes.create_string_buffer(data, len(data))
-    din = _DATA_BLOB(len(data), ctypes.cast(buf, ctypes.c_void_p))
-    dout = _DATA_BLOB()
+    data_in = _DATA_BLOB(len(data), ctypes.cast(buf, ctypes.c_void_p))
+    data_out = _DATA_BLOB()
     if protect:
-        ok = crypt32.CryptProtectData(ctypes.byref(din), "netpulse",
-                                      None, None, None, 0, ctypes.byref(dout))
+        ok = crypt32.CryptProtectData(ctypes.byref(data_in), "netpulse",
+                                      None, None, None, 0,
+                                      ctypes.byref(data_out))
     else:
-        ok = crypt32.CryptUnprotectData(ctypes.byref(din), None,
-                                        None, None, None, 0, ctypes.byref(dout))
+        ok = crypt32.CryptUnprotectData(ctypes.byref(data_in), None,
+                                        None, None, None, 0,
+                                        ctypes.byref(data_out))
     if not ok:
         raise OSError("ошибка DPAPI")
-    out = ctypes.string_at(dout.pbData, dout.cbData)
-    kernel32.LocalFree(dout.pbData)
+    out = ctypes.string_at(data_out.pbData, data_out.cbData)
+    kernel32.LocalFree(data_out.pbData)
     return out
 
 
-def is_encrypted(v) -> bool:
-    return isinstance(v, str) and v.startswith(PREFIX)
+def is_encrypted(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(PREFIX)
 
 
 def encrypt_value(plain: str) -> str:
@@ -71,7 +76,7 @@ def decrypt_value(stored: str) -> str:
     return _crypt(raw, protect=False).decode("utf-8")
 
 
-def _encrypt_if_secret(key, value):
+def encrypt_if_secret(key: Optional[str], value: Any) -> Any:
     if (key in SECRET_KEYS and isinstance(value, str)
             and value and not is_encrypted(value)):
         try:
@@ -81,16 +86,16 @@ def _encrypt_if_secret(key, value):
     return value
 
 
-def encrypt_config(node, key=None):
+def encrypt_config(node: Any, key: Optional[str] = None) -> Any:
     """Рекурсивно шифрует секретные строковые значения (для save_config)."""
     if isinstance(node, dict):
         return {k: encrypt_config(v, k) for k, v in node.items()}
     if isinstance(node, list):
         return [encrypt_config(x, key) for x in node]
-    return _encrypt_if_secret(key, node)
+    return encrypt_if_secret(key, node)
 
 
-def decrypt_config(node, key=None):
+def decrypt_config(node: Any, key: Optional[str] = None) -> Any:
     """Рекурсивно расшифровывает значения с префиксом dpapi: (для load_config).
     При сбое (другая машина/профиль) оставляет значение как есть."""
     if isinstance(node, dict):
@@ -103,3 +108,7 @@ def decrypt_config(node, key=None):
         except Exception:
             return node
     return node
+
+
+# Алиас старого приватного имени.
+_encrypt_if_secret = encrypt_if_secret

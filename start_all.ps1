@@ -1,10 +1,10 @@
-﻿# NetPulse: единый запуск всей решётки с правами администратора.
+﻿# NetPulse: единый запуск с правами администратора.
 #
 # Запускает:
-#   1) node0  (mesh\node0,  P2P-узел, порт 9000)
-#   2) node1  (mesh\node1,  P2P-узел, порт 9001)
-#   3) hub    (веб-панель + мульти-таргет мост в решётку, порт 8771)
+#   1) node0  (mesh\node0,  настоящая P2P-нода, порт 9000)
+#   2) hub    (веб-панель + мост в решётку, порт 8771)
 #
+# По пути гасит зависшие/симулятивные процессы (9001, 8770).
 # При запуске без прав — сам перезапускается через UAC (RunLevel Highest).
 
 param(
@@ -16,7 +16,21 @@ $ErrorActionPreference = "Stop"
 
 # ---- определение корня и python ----
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Py = "C:\Users\ebann\AppData\Local\Python\pythoncore-3.14-64\python.exe"
+# NOTE: не инлайнить (Get-Command ...).Source внутрь @(...) через запятую —
+# парсер Windows PowerShell 5.1 ломается на таком переносе строки.
+$PyShim = $null
+$Py3Shim = $null
+try { $PyShim = (Get-Command python -ErrorAction SilentlyContinue).Source } catch {}
+try { $Py3Shim = (Get-Command python3 -ErrorAction SilentlyContinue).Source } catch {}
+$PyCandidates = @($env:NETPULSE_PYTHON, $PyShim, $Py3Shim)
+$LocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
+foreach ($ver in @('3.14', '3.13', '3.12', '3.11', '3.10')) {
+    $PyCandidates += Join-Path $LocalAppData "Python\pythoncore-$ver-64\python.exe"
+}
+$Py = $PyCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+if (-not $Py) {
+    throw "[netpulse] Python не найден. Установите Python или задайте переменную окружения NETPULSE_PYTHON."
+}
 
 # ---- самоподъём прав ----
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -60,27 +74,26 @@ Write-Host "==================================================" -ForegroundColor
 Write-Host "NETPULSE — единый запуск решётки (администратор)"    -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 
-# ---- 1. гасим старые процессы ----
+# ---- 1. гасим старые процессы (включая симулятивные/зависшие ноды) ----
 Write-Host ""
 Write-Host "[netpulse] Остановка старых процессов..." -ForegroundColor Cyan
 Stop-PortOwner 9000 "node0"
-Stop-PortOwner 9001 "node1"
+Stop-PortOwner 9001 "ex-node1"
+Stop-PortOwner 8770 "stale-hub"
 Stop-PortOwner 8771 "hub"
 Start-Sleep -Seconds 2
 
-# ---- 2. ноды решётки ----
+# ---- 2. нода решётки (одна настоящая, mesh\node0, порт 9000) ----
 Write-Host ""
-Write-Host "[netpulse] Запуск P2P-узлов..." -ForegroundColor Cyan
+Write-Host "[netpulse] Запуск P2P-ноды..." -ForegroundColor Cyan
 $p0 = Start-Node (Join-Path $Root "mesh\node0") "node0"
-$p1 = Start-Node (Join-Path $Root "mesh\node1") "node1"
 
-# дождимся слушающих портов
-Write-Host "[netpulse] ждём готовности узлов (9000/9001)..." -ForegroundColor Cyan
+# дождёмся слушающего порта
+Write-Host "[netpulse] ждём готовности ноды (9000)..." -ForegroundColor Cyan
 $deadline = (Get-Date).AddSeconds(40)
 while ((Get-Date) -lt $deadline) {
     $l0 = Get-NetTCPConnection -LocalPort 9000 -State Listen -ErrorAction SilentlyContinue
-    $l1 = Get-NetTCPConnection -LocalPort 9001 -State Listen -ErrorAction SilentlyContinue
-    if ($l0 -and $l1) { break }
+    if ($l0) { break }
     Start-Sleep -Seconds 1
     Write-Host "." -NoNewline -ForegroundColor DarkGray
 }
@@ -112,7 +125,13 @@ if ($webOk) {
     Write-Host ""
     Write-Host "[netpulse] ГОТОВО:" -ForegroundColor Green
     Write-Host "[netpulse]   веб-панель: http://127.0.0.1:8771" -ForegroundColor Green
-    Write-Host "[netpulse]   node0: ws://127.0.0.1:9000  node1: ws://127.0.0.1:9001" -ForegroundColor Green
+    Write-Host "[netpulse]   node0: ws://127.0.0.1:9000 (настоящая нода)" -ForegroundColor Green
+    try {
+        $who = Invoke-RestMethod -Uri "http://127.0.0.1:8771/api/whoami" -TimeoutSec 10
+        Write-Host "[netpulse]   API: OK (whoami -> $($who.user)/$($who.role))" -ForegroundColor Green
+    } catch {
+        Write-Host "[netpulse]   API: порт слушает, но /api/whoami не ответил — см. logs\hub.err.log" -ForegroundColor Yellow
+    }
     if ($Open) {
         Start-Process "http://127.0.0.1:8771"
     }

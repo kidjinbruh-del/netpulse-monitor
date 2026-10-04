@@ -1,0 +1,143 @@
+{
+  "web": {
+    "host": "127.0.0.1",
+    "port": 8770,
+    "auth_enabled": true,
+    "token": "CHANGE-ME",
+    "admins": [],
+    "users": [],
+    "cors_origins": [],
+    "tls_enabled": false,
+    "tls_cert": "",
+    "tls_key": "",
+    "static_cache": false
+  },
+  "ping": {
+    "enabled": true,
+    "interval_sec": 10,
+    "targets": [
+      "8.8.8.8",
+      "1.1.1.1"
+    ],
+    "count": 3,
+    "timeout_sec": 5
+  },
+  "mtr": {
+    "enabled": true,
+    "interval_sec": 300,
+    "targets": [],
+    "max_hops": 14,
+    "cycle_sec": 60
+  },
+  "speedtest": {
+    "enabled": true,
+    "interval_sec": 3600,
+    "url_down": "https://speed.hetzner.de/{bytes}.bin",
+    "url_up": "",
+    "bytes_down": 8000000,
+    "bytes_up": 2000000,
+    "timeout_sec": 20
+  },
+  "diagnostics": {
+    "trace_targets": [],
+    "resolve_hosts": []
+  },
+  "ids": {
+    "enabled": true,
+    "whitelist": [],
+    "suspicious_ports": [
+      4444,
+      5555,
+      6666,
+      31337
+    ]
+  },
+  "ai": {
+    "enabled": true,
+    "anomaly_threshold": 0.6,
+    "forecast_hours": 24
+  },
+  "quota": {
+    "enabled": true,
+    "daily_limit_mb": 10000,
+    "monthly_limit_mb": 100000
+  },
+  "backup": {
+    "enabled": false,
+    "time": "03:00",
+    "dir": "C:\\Backups",
+    "keep": 7
+  },
+  "backupwatch": {
+    "enabled": false,
+    "interval_sec": 3600,
+    "targets": []
+  },
+  "planner": {
+    "enabled": true
+  },
+  "infra": {
+    "enabled": true,
+    "community": "public",
+    "scan_interval_sec": 3600
+  },
+  "cve": {
+    "enabled": false,
+    "api_key": "",
+    "check_interval_sec": 86400
+  },
+  "proxmox": {
+    "enabled": false,
+    "host": "",
+    "user": "",
+    "token_name": "",
+    "token_value": "",
+    "verify_ssl": false
+  },
+  "p2p": {
+    "enabled": false,
+    "targets": [],
+    "node_id": "",
+    "port": 9000,
+    "target": "",
+    "target_node": "",
+    "host": "127.0.0.1",
+    "secret": "",
+    "call_timeout": 15,
+    "reconnect_sec": 5
+  },
+  "security": {
+    "brute_force_max_fails": 5,
+    "brute_force_block_sec": 600,
+    "rate_limit_requests": 100,
+    "rate_limit_window_sec": 60,
+    "suspicious_ports": [
+      4444,
+      5555,
+      6666,
+      31337
+    ]
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/netpulse.log",
+    "max_bytes": 2000000,
+    "backup_count": 5,
+    "json_format": true
+  },
+  "database": {
+    "path": "network_stats.db",
+    "wal_mode": true
+  },
+  "telegram": {
+    "enabled": false,
+    "token": "",
+    "chat_id": "",
+    "notify_on_alert": true
+  },
+  "ip_allowlist": {
+    "enabled": false,
+    "networks": []
+  },
+  "version": "3.0.0"
+}

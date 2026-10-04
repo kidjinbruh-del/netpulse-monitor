@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Дашборд{% endblock %}
+
+{% block content %}
+<h1>Дашборд</h1>
+<p class="srv-live">Первый paint — серверный (Jinja2). Живое обновление — SSE + fetch.</p>
+
+{% include "partials/session_table.html" %}
+
+<div class="srv-grid">
+  {% include "partials/forecast_bar.html" %}
+  <div class="srv-card">
+    <div class="k">Алерты без подтверждения</div>
+    <div class="v" data-srv="alerts_unread">{{ state.alerts_unread|fmtnum(0) if state.alerts_unread is defined else "—" }}</div>
+    <div class="s"><a href="/api/alerts">список алертов</a></div>
+  </div>
+</div>
+
+{% include "partials/park_table.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var live = document.getElementById("srv-live");
+  function setLive(on, text) {
+    if (!live) return;
+    live.classList.toggle("on", !!on);
+    live.querySelector("span").textContent = text;
+  }
+  function applyState(s) {
+    if (!s) return;
+    document.querySelectorAll("[data-srv]").forEach(function (el) {
+      var k = el.getAttribute("data-srv");
+      if (k === "ping" && s.ping) el.textContent = (s.ping.current || 0) + " ms";
+      else if (k === "loss" && s.ping) el.textContent = String(s.ping.loss_pct || 0).replace(".", ",") + "%";
+      else if (k === "quality" && s.quality) el.textContent = s.quality.label;
+      else if (k === "quality_score" && s.quality) el.textContent = s.quality.score;
+      else if (k === "down_kbps" && s.down_kbps != null) el.textContent = fmtSpeed(s.down_kbps);
+      else if (k === "up_kbps" && s.up_kbps != null) el.textContent = fmtSpeed(s.up_kbps);
+      else if (s[k] != null && typeof s[k] !== "object") el.textContent = fmtNum(s[k]);
+    });
+  }
+  function fmtNum(v) {
+    if (typeof v !== "number") return v;
+    return v.toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+  }
+  function fmtSpeed(kb) {
+    if (kb >= 1024) return fmtNum(kb / 1024) + " Мбит/с";
+    return fmtNum(Math.round(kb)) + " Кбит/с";
+  }
+  function token() { try { return localStorage.getItem("np-token") || ""; } catch (e) { return ""; } }
+  // 1) SSE-стрим (работает при cookie-сессии)
+  try {
+    var es = new EventSource("/api/stream");
+    es.addEventListener("state", function (ev) {
+      try { applyState(JSON.parse(ev.data)); setLive(true, "live (SSE)"); } catch (e) {}
+    });
+    es.onerror = function () { es.close(); poll(); };
+  } catch (e) { poll(); }
+  // 2) fallback: опрос /api/state с токеном из localStorage
+  var timer = null;
+  function poll() {
+    if (timer) return;
+    var tick = function () {
+      fetch("/api/state", { headers: { "X-Auth": token() } }).then(function (r) {
+        if (!r.ok) throw new Error("http " + r.status);
+        return r.json();
+      }).then(function (s) { applyState(s); setLive(true, "live (poll)"); })
+      .catch(function () { setLive(false, "snapshot"); });
+    };
+    tick();
+    timer = setInterval(tick, 5000);
+  }
+})();
+</script>
+{% endblock %}

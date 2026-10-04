@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}NetPulse{% endblock %} — NetPulse {{ app_version }}</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>
+  .srv-wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  .srv-head { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+  .srv-head .logo { font-size: 22px; font-weight: 700; }
+  .srv-head .ver { opacity: .6; font-size: 13px; }
+  .srv-badge { margin-left: auto; font-size: 13px; padding: 4px 10px; border-radius: 12px; background: #1d2b1d; color: #7fd67f; }
+  .srv-badge.noauth { background: #2b1d1d; color: #d67f7f; }
+  .srv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 12px 0; }
+  .srv-card { background: #151515; border: 1px solid #2a2a2a; border-radius: 10px; padding: 14px 16px; }
+  .srv-card .k { font-size: 12px; opacity: .6; text-transform: uppercase; letter-spacing: .06em; }
+  .srv-card .v { font-size: 26px; font-weight: 700; margin-top: 4px; }
+  .srv-card .s { font-size: 12px; opacity: .65; margin-top: 2px; }
+  .srv-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .srv-table th, .srv-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #262626; }
+  .srv-table th { opacity: .55; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  .st-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
+  .st-dot.ok { background: #4caf50; } .st-dot.warn { background: #ffc107; } .st-dot.bad { background: #f44336; }
+  .srv-bar { height: 8px; background: #262626; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .srv-bar > div { height: 100%; background: #4d9fff; }
+  .srv-foot { margin-top: 18px; font-size: 12px; opacity: .5; display: flex; gap: 12px; }
+  .srv-live { font-size: 12px; opacity: .6; }
+  .srv-live i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 6px; }
+  .srv-live.on i { background: #4caf50; }
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+<div class="srv-wrap">
+  <header class="srv-head">
+    <span class="logo">NetPulse</span>
+    <span class="ver">v{{ app_version }}</span>
+    {% if auth_enabled %}
+    <span class="srv-badge">auth on</span>
+    {% else %}
+    <span class="srv-badge noauth">auth off</span>
+    {% endif %}
+    <span class="srv-live" id="srv-live"><i></i><span>snapshot</span></span>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="srv-foot">
+    <span>Сформировано сервером (Jinja2)</span>
+    <a href="/index.html">полный SPA</a>
+    <a href="/api/docs">API docs</a>
+  </footer>
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

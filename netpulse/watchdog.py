@@ -1,12 +1,16 @@
-"""
-Сторож парка ПК: периодический опрос машин через PowerShell (локально или
+"""Сторож парка ПК: периодический опрос машин через PowerShell (локально или
 по WinRM Invoke-Command), правила на диск/RAM/EventLog, события в инвентарь.
 
 Ноль внешних зависимостей: только subprocess + powershell.exe.
 Конфиг: config.json -> "watchdog": {enabled, interval_min, timeout_sec,
 hosts[], disk_free_pct, ram_free_mb, event_ids[], event_hours,
 offline_after_polls}.
+
+v3-реализация: тот же контракт ParkWatchdog(service), типизировано.
+service обязан давать .cfg (dict), .db (execute/executemany), .inventory;
+опционально .lan/.infra/.customchecks.
 """
+from __future__ import annotations
 
 import json
 import logging
@@ -15,6 +19,7 @@ import subprocess
 import sys
 import threading
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from core.utils import decode_process_output
 
@@ -44,13 +49,16 @@ PS_COLLECT = (
     "disks=$d;errors=$e;smart=$smart} | ConvertTo-Json -Depth 3 -Compress"
 )
 
+CRITICAL_EVENT_IDS = {41, 6008}
+MAX_HOSTS_PER_CYCLE = 60
 
-def _now_iso():
+
+def _now_iso() -> str:
     return datetime.now().isoformat()
 
 
 class ParkWatchdog:
-    def __init__(self, service):
+    def __init__(self, service: Any):
         self.svc = service
         self.svc.db.execute(
             """CREATE TABLE IF NOT EXISTS disk_history (
@@ -61,12 +69,12 @@ class ParkWatchdog:
         self.svc.db.execute(
             "CREATE INDEX IF NOT EXISTS idx_diskhist ON disk_history(host_id, drive)")
         self._stop = threading.Event()
-        self._fail_streak = {}
-        self._thread = None
+        self._fail_streak: Dict[str, int] = {}
+        self._thread: Optional[threading.Thread] = None
 
     # ---------- конфиг ----------
 
-    def _cfg(self):
+    def _cfg(self) -> Dict[str, Any]:
         base = {
             "enabled": False, "interval_min": 15, "timeout_sec": 25,
             "hosts": ["127.0.0.1"], "disk_free_pct": 10, "ram_free_mb": 500,
@@ -77,16 +85,17 @@ class ParkWatchdog:
         base.update(cfg)
         return base
 
-    def _is_local(self, host):
+    @staticmethod
+    def is_local(host: str) -> bool:
         h = str(host).lower().strip()
         local = ("127.0.0.1", "localhost", "::1", socket.gethostname().lower())
         return h in local
 
     # ---------- сбор ----------
 
-    def _collect(self, host, timeout_sec):
+    def collect(self, host: str, timeout_sec: int) -> Dict[str, Any]:
         body = PS_COLLECT.replace("%EH%", "24")
-        if self._is_local(host):
+        if self.is_local(host):
             cmd = ["powershell", "-NoProfile", "-NonInteractive",
                    "-Command", body]
         else:
@@ -96,8 +105,7 @@ class ParkWatchdog:
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout_sec,
                               creationflags=flags)
-        out = decode_process_output(proc.stdout or b"")
-        out = out.strip()
+        out = decode_process_output(proc.stdout or b"").strip()
         if not out:
             raise RuntimeError("пустой ответ")
         data = json.loads(out)
@@ -105,14 +113,35 @@ class ParkWatchdog:
             data = data[0] if data else {}
         return data
 
-    def _apply_rules(self, host, host_id, data):
+    def apply_rules(
+        self, host: str, host_id: Optional[int], data: Dict[str, Any]
+    ) -> int:
         inv = self.svc.inventory
         cfg = self._cfg()
         found = []
+        found.extend(self._disk_problems(data, cfg))
+        ram_problem = self._ram_problem(data, cfg)
+        if ram_problem:
+            found.append(ram_problem)
+        found.extend(self._eventlog_problems(data, cfg))
+        found.extend(self._smart_problems(data))
 
+        for kind, sev, text, key, hours in found:
+            inv.note_event(host_id, kind, sev, "watchdog", text,
+                           dedup_key=key, dedup_hours=hours)
+        return len(found)
+
+    @staticmethod
+    def _disk_problems(
+        data: Dict[str, Any], cfg: Dict[str, Any]
+    ) -> list:
+        found = []
         for d in (data.get("disks") or []):
-            total = float(d.get("total") or 0)
-            free = float(d.get("free") or 0)
+            try:
+                total = float(d.get("total") or 0)
+                free = float(d.get("free") or 0)
+            except (TypeError, ValueError):
+                continue
             if total <= 0:
                 continue
             pct = free / total * 100.0
@@ -120,15 +149,33 @@ class ParkWatchdog:
                 found.append(("disk", "CRITICAL",
                               f"Диск {d.get('drive')} заполнен: свободно "
                               f"{pct:.0f}% ({free} GB)",
-                              f"{host}:disk:{d.get('drive')}", 12))
+                              f"{data.get('host', '')}:disk:{d.get('drive')}", 12))
+        return found
 
+    @staticmethod
+    def _ram_problem(data: Dict[str, Any], cfg: Dict[str, Any]):
         ram = data.get("ramFreeMB")
-        if ram is not None and float(ram) < float(cfg["ram_free_mb"]):
-            found.append(("ram", "HIGH",
-                          f"Мало памяти: свободно {ram} MB",
-                          f"{host}:ram:{datetime.now():%Y%m%d%H}", 2))
+        if ram is None:
+            return None
+        try:
+            low = float(ram) < float(cfg["ram_free_mb"])
+        except (TypeError, ValueError):
+            return None
+        if not low:
+            return None
+        return ("ram", "HIGH",
+                f"Мало памяти: свободно {ram} MB",
+                f"{data.get('host', '')}:ram:{datetime.now():%Y%m%d%H}", 2)
 
-        watch_ids = set(int(x) for x in (cfg["event_ids"] or []))
+    @staticmethod
+    def _eventlog_problems(
+        data: Dict[str, Any], cfg: Dict[str, Any]
+    ) -> list:
+        found = []
+        try:
+            watch_ids = set(int(x) for x in (cfg["event_ids"] or []))
+        except (TypeError, ValueError):
+            watch_ids = set()
         seen_ids = set()
         for e in (data.get("errors") or []):
             try:
@@ -139,83 +186,32 @@ class ParkWatchdog:
                 continue
             seen_ids.add(eid)
             text = (e.get("text") or "").strip()[:160]
-            sev = "HIGH" if eid in (41, 6008) else "MEDIUM"
+            sev = "HIGH" if eid in CRITICAL_EVENT_IDS else "MEDIUM"
             found.append(("eventlog", sev,
                           f"Event ID {eid}: {text}",
-                          f"{host}:ev:{eid}:{datetime.now():%Y%m%d}", 20))
+                          f"{data.get('host', '')}:ev:{eid}:"
+                          f"{datetime.now():%Y%m%d}", 20))
+        return found
 
+    @staticmethod
+    def _smart_problems(data: Dict[str, Any]) -> list:
+        found = []
         for s in (data.get("smart") or []):
             reason = str(s.get("reason") or "").strip()[:100]
             found.append(("smart", "CRITICAL",
                           f"S.M.A.R.T. предсказывает отказ диска "
                           f"({reason or 'без причины'})",
-                          f"{host}:smart", 24))
+                          f"{data.get('host', '')}:smart", 24))
+        return found
 
-        for kind, sev, text, key, hours in found:
-            inv.note_event(host_id, kind, sev, "watchdog", text,
-                           dedup_key=key, dedup_hours=hours)
-        return len(found)
-
-    def _poll_host(self, host, cfg):
+    def poll_host(self, host: str, cfg: Dict[str, Any]) -> None:
         inv = self.svc.inventory
         timeout_sec = int(cfg.get("timeout_sec", 25))
-        if self._is_local(host):
-            try:
-                _, my_ip = self.svc.lan.local_subnet()
-            except Exception:
-                my_ip = "127.0.0.1"
-            ping_ip = my_ip or "127.0.0.1"
-        else:
-            ping_ip = host
+        ping_ip = self._ping_target(host)
         try:
-            data = self._collect(host, timeout_sec)
+            data = self.collect(host, timeout_sec)
         except Exception as e:
-            # WinRM не ответил: различаем «машина выключена» и «жива, но не Windows»
-            if self._is_local(host):
-                try:
-                    _, my_ip = self.svc.lan.local_subnet()
-                except Exception:
-                    my_ip = "127.0.0.1"
-                ping_ip = my_ip or "127.0.0.1"
-            else:
-                ping_ip = host
-            from netpulse.infra import ping as infra_ping
-            ping_ok = infra_ping(ping_ip)
-            streak = self._fail_streak.get(host, 0) + 1
-            self._fail_streak[host] = streak
-            if ping_ok:
-                hid = inv.upsert_host(host, ip=ping_ip)
-                if hid:
-                    inv.mark_online(hid, True)
-                    if streak >= int(cfg.get("offline_after_polls", 3)):
-                        inv.note_event(
-                            hid, "nowinrm", "LOW", "watchdog",
-                            "Отвечает на ping, но нет WinRM — не Windows "
-                            "или выключен WinRM",
-                            dedup_key=f"{host}:nowinrm", dedup_hours=168)
-                    try:
-                        dtype = self.svc.infra.classify(ping_ip, None,
-                                                        winrm_ok=False)
-                        if dtype:
-                            row = next((r for r in inv.list_hosts()
-                                        if r["id"] == hid), None)
-                            if row and not row.get("dtype_manual") \
-                                    and not row.get("dtype"):
-                                self.svc.infra.set_dtype(hid, dtype,
-                                                         manual=False)
-                    except Exception:
-                        pass
-                return
-            if streak >= int(cfg.get("offline_after_polls", 3)):
-                hid = inv.upsert_host(host, ip=(host if not self._is_local(host) else ""))
-                if hid:
-                    inv.mark_online(hid, False)
-                    inv.note_event(
-                        hid, "offline", "HIGH", "watchdog",
-                        f"Машина недоступна {streak} опросов подряд "
-                        f"({str(e)[:80]})",
-                        dedup_key=f"{host}:offline:{datetime.now():%Y%m%d}",
-                        dedup_hours=6)
+            self._handle_unreachable(host, cfg, ping_ip, e)
             return
 
         hid = inv.upsert_host(data.get("host") or host,
@@ -228,16 +224,71 @@ class ParkWatchdog:
                            "Снова в сети", dedup_key=f"{host}:online:"
                            f"{datetime.now():%Y%m%d}", dedup_hours=6)
         self._fail_streak[host] = 0
-        problems = self._apply_rules(host, hid, data) if hid else 0
+        problems = self.apply_rules(host, hid, data) if hid else 0
         if hid:
             self._record_disks(hid, data.get("disks") or [])
         logger.debug("Сторож: %s ок (проблем: %s)", host, problems)
 
-    def _record_disks(self, host_id, disks):
+    def _ping_target(self, host: str) -> str:
+        if self.is_local(host):
+            try:
+                _, my_ip = self.svc.lan.local_subnet()
+            except Exception:
+                my_ip = "127.0.0.1"
+            return my_ip or "127.0.0.1"
+        return host
+
+    def _handle_unreachable(
+        self, host: str, cfg: Dict[str, Any], ping_ip: str, error: Exception
+    ) -> None:
+        """WinRM не ответил: различаем «машина выключена» и «жива, но не Windows»."""
+        from netpulse.infra import ping as infra_ping
+        inv = self.svc.inventory
+        threshold = int(cfg.get("offline_after_polls", 3))
+        ping_ok = infra_ping(ping_ip)
+        streak = self._fail_streak.get(host, 0) + 1
+        self._fail_streak[host] = streak
+        if ping_ok:
+            hid = inv.upsert_host(host, ip=ping_ip)
+            if hid:
+                inv.mark_online(hid, True)
+                if streak >= threshold:
+                    inv.note_event(
+                        hid, "nowinrm", "LOW", "watchdog",
+                        "Отвечает на ping, но нет WinRM — не Windows "
+                        "или выключен WinRM",
+                        dedup_key=f"{host}:nowinrm", dedup_hours=168)
+                self._maybe_classify(hid, ping_ip, inv)
+            return
+        if streak >= threshold:
+            hid = inv.upsert_host(
+                host, ip=(host if not self.is_local(host) else ""))
+            if hid:
+                inv.mark_online(hid, False)
+                inv.note_event(
+                    hid, "offline", "HIGH", "watchdog",
+                    f"Машина недоступна {streak} опросов подряд "
+                    f"({str(error)[:80]})",
+                    dedup_key=f"{host}:offline:{datetime.now():%Y%m%d}",
+                    dedup_hours=6)
+
+    def _maybe_classify(
+        self, hid: int, ping_ip: str, inv: Any
+    ) -> None:
+        try:
+            dtype = self.svc.infra.classify(ping_ip, None, winrm_ok=False)
+            if dtype:
+                row = next((r for r in inv.list_hosts() if r["id"] == hid), None)
+                if row and not row.get("dtype_manual") and not row.get("dtype"):
+                    self.svc.infra.set_dtype(hid, dtype, manual=False)
+        except Exception:
+            pass
+
+    def _record_disks(self, host_id: int, disks: list) -> None:
         rows = []
         for d in disks or []:
             try:
-                rows.append(((_now_iso()), host_id, str(d.get("drive")),
+                rows.append((_now_iso(), host_id, str(d.get("drive")),
                              float(d.get("free") or 0),
                              float(d.get("total") or 0)))
             except (ValueError, TypeError):
@@ -248,7 +299,7 @@ class ParkWatchdog:
                    (timestamp, host_id, drive, free_gb, total_gb)
                    VALUES (?,?,?,?,?)""", rows)
 
-    def _resolve_hosts(self, cfg):
+    def resolve_hosts(self, cfg: Dict[str, Any]) -> List[str]:
         """Список целей. 'auto' = все машины из БД (парк + сканы ЛС)."""
         raw = [h.strip() for h in (cfg.get("hosts") or []) if str(h).strip()]
         if not any(h.lower() == "auto" for h in raw):
@@ -267,24 +318,24 @@ class ParkWatchdog:
                     continue
                 seen.add(v)
                 out.append(v)
-        # главный узел (эта машина) — всегда первый, локальный сбор без WinRM
+        # Главный узел (эта машина) — всегда первый, локальный сбор без WinRM.
         try:
             me = socket.gethostname()
             if me.lower() not in {x.lower() for x in out}:
                 out.insert(0, me)
         except Exception:
             pass
-        return out[:60]
+        return out[:MAX_HOSTS_PER_CYCLE]
 
-    def poll_cycle(self):
+    def poll_cycle(self) -> Dict[str, Any]:
         """Один обход всего списка. Вызывается по расписанию или вручную."""
         cfg = self._cfg()
-        hosts = self._resolve_hosts(cfg)
-        for host in hosts[:60]:
+        hosts = self.resolve_hosts(cfg)
+        for host in hosts[:MAX_HOSTS_PER_CYCLE]:
             if self._stop.is_set():
                 break
             try:
-                self._poll_host(host, cfg)
+                self.poll_host(host, cfg)
             except Exception as e:
                 logger.warning("Сторож: сбой по %s: %s", host, e)
         try:
@@ -297,7 +348,9 @@ class ParkWatchdog:
             logger.warning("Карма не пересчитана: %s", e)
         return {"ok": True, "polled": len(hosts)}
 
-    def disk_forecast(self, window_days=21, horizon_days=90):
+    def disk_forecast(
+        self, window_days: int = 21, horizon_days: int = 90
+    ) -> List[Dict[str, Any]]:
         """Прогноз заполнения: по наклону свободного места за окно."""
         rows = self.svc.db.execute(
             """SELECT h.name AS host, dh.drive,
@@ -344,12 +397,12 @@ class ParkWatchdog:
 
     # ---------- жизненный цикл ----------
 
-    def start(self):
+    def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
 
-        def loop():
+        def loop() -> None:
             interval = max(5, int(self._cfg().get("interval_min", 15))) * 60
             while not self._stop.wait(5):
                 try:
@@ -363,10 +416,10 @@ class ParkWatchdog:
         self._thread.start()
         logger.info("Сторож парка запущен")
 
-    def stop(self):
+    def stop(self) -> None:
         self._stop.set()
 
-    def status(self):
+    def status(self) -> Dict[str, Any]:
         cfg = self._cfg()
         return {
             "enabled": bool(cfg["enabled"]),

@@ -1,23 +1,27 @@
-"""
-L2-карта: физическая топология по SNMP.
+"""L2-карта: физическая топология по SNMP.
 
 Где сидит устройство физически (порт коммутатора), соседи по LLDP/CDP и
-PTR-резолв имён для устройств без hotname. Всё на чистом stdlib:
-SNMP GETNEXT поверх существующего BER-кода из infra.py.
+PTR-резолв имён для устройств без hostname. Всё на чистом stdlib:
+SNMP GETNEXT поверх BER-кода из infra.py.
 
 - Bridge-MIB (dot1dTpFdbTable): MAC -> порт моста -> ifIndex -> имя интерфейса
 - LLDP-MIB (lldpRemTable): соседи устройства (sysName/chassis MAC)
 - PTR (socket.gethostbyaddr): подпись имён для lan_devices без hostname
+
+v3-реализация: тот же контракт L2Map(service), типизировано.
+service обязан давать .db и .inventory; опционально .cfg.
 """
+from __future__ import annotations
 
 import logging
 import socket
 import threading
 import time
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
-from .infra import _tlv, _int_enc, _oid_enc, _octet, _tlv_parse, _oid_dec, \
-    _val_convert, ping as infra_ping
+from .infra import (ber_int, ber_octet, ber_oid, ber_parse, ber_tlv,
+                    oid_decode, ping as infra_ping, value_convert)
 
 logger = logging.getLogger(__name__)
 
@@ -33,62 +37,69 @@ OID_LLDP_CHASSIS = "1.0.8802.1.1.2.1.4.1.1.5"
 OID_LLDP_PORTID = "1.0.8802.1.1.2.1.4.1.1.6"
 OID_LLDP_SYSNAME = "1.0.8802.1.1.2.1.4.1.1.9"
 
-_MAX_VARS = 40
+SNMP_PORT = 161
+MAX_VARS = 40
 
 
-def _now_iso():
+def _now_iso() -> str:
     return datetime.now().isoformat()
 
 
 # ---------- SNMP GETNEXT / walk ----------
 
-def snmp_getnext(ip, community, oid, timeout=2.0, max_vars=_MAX_VARS):
+def snmp_getnext(
+    ip: str, community: str, oid: str,
+    timeout: float = 2.0, max_vars: int = MAX_VARS,
+) -> Tuple[Optional[str], List[Tuple[str, Any]]]:
     """Один GETNEXT. Возврат: (end_oid, list[(oid, value)]) или (None, [])."""
     req_id = int(time.time()) & 0x7FFFFFFF
-    varbind = _tlv(0x30, _oid_enc(oid) + _tlv(0x05, b""))
-    pdu = _tlv(0xA1, _int_enc(req_id) + _int_enc(0) + _int_enc(0)
-               + _tlv(0x30, varbind))
-    packet = _tlv(0x30, _int_enc(1) + _octet(community) + pdu)
+    varbind = ber_tlv(0x30, ber_oid(oid) + ber_tlv(0x05, b""))
+    pdu = ber_tlv(0xA1, ber_int(req_id) + ber_int(0) + ber_int(0)
+                  + ber_tlv(0x30, varbind))
+    packet = ber_tlv(0x30, ber_int(1) + ber_octet(community) + pdu)
 
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(timeout)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
     try:
-        s.sendto(packet, (ip, 161))
-        data, _ = s.recvfrom(65535)
+        sock.sendto(packet, (ip, SNMP_PORT))
+        data, _ = sock.recvfrom(65535)
     except (socket.timeout, OSError):
         return None, []
     finally:
-        s.close()
+        sock.close()
 
     try:
-        _, outer, _ = _tlv_parse(data, 0)
+        _, outer, _ = ber_parse(data, 0)
         pos = 0
-        _, _, pos = _tlv_parse(outer, pos)
-        _, _, pos = _tlv_parse(outer, pos)
-        _, pdu_c, _ = _tlv_parse(outer, pos)
+        _, _, pos = ber_parse(outer, pos)
+        _, _, pos = ber_parse(outer, pos)
+        _, pdu_c, _ = ber_parse(outer, pos)
         p = 0
-        _, _, p = _tlv_parse(pdu_c, p)
-        _, err, p = _tlv_parse(pdu_c, p)
+        _, _, p = ber_parse(pdu_c, p)
+        _, err, p = ber_parse(pdu_c, p)
         errv = int.from_bytes(err, "big") if err else 0
-        _, _, p = _tlv_parse(pdu_c, p)
-        vtag, vblist, _ = _tlv_parse(pdu_c, p)
+        _, _, p = ber_parse(pdu_c, p)
+        vtag, vblist, _ = ber_parse(pdu_c, p)
         if vtag != 0x30 or errv:
             return None, []
         out, q = [], 0
         while q < len(vblist):
-            tag1, c1, q = _tlv_parse(vblist, q)
+            tag1, c1, q = ber_parse(vblist, q)
             if tag1 != 0x30:
                 break
-            _, oid_c, q2 = _tlv_parse(c1, 0)
-            vtag, vraw, _ = _tlv_parse(c1, q2)
-            out.append((_oid_dec(oid_c), _val_convert(vtag, vraw)))
+            _, oid_c, q2 = ber_parse(c1, 0)
+            vtag2, vraw, _ = ber_parse(c1, q2)
+            out.append((oid_decode(oid_c), value_convert(vtag2, vraw)))
         return (out[-1][0] if out else None), out
     except Exception as e:
         logger.debug("GETNEXT %s (%s): %s", ip, oid, e)
         return None, []
 
 
-def snmp_walk(ip, community, base_oid, timeout=2.0, limit=500, check_first=None):
+def snmp_walk(
+    ip: str, community: str, base_oid: str,
+    timeout: float = 2.0, limit: int = 500, check_first=None,
+) -> List[Tuple[str, Any]]:
     """Полный walk по base_oid (включительно). Возврат: [(oid, value)]."""
     result, current, guard = [], base_oid, 0
     while current and guard < limit:
@@ -112,30 +123,37 @@ def snmp_walk(ip, community, base_oid, timeout=2.0, limit=500, check_first=None)
     return result
 
 
-def mac_iso(raw):
-    """Нормализация hex-MAC ('001122334455') -> '00:11:22:33:44:55'."""
-    raw = str(raw or "").replace(":", "").replace("-", "")
+def mac_iso(raw: Any) -> Optional[str]:
+    """Нормализация MAC: hex-строка или список октетов -> 'aa:bb:cc:dd:ee:ff'."""
+    if isinstance(raw, (list, tuple)):
+        try:
+            raw = "".join(f"{int(x):02x}" for x in raw)
+        except (TypeError, ValueError):
+            return None
+    else:
+        raw = str(raw or "").replace(":", "").replace("-", "")
     raw = raw[:12].lower()
-    return ":".join(raw[i:i + 2] for i in range(0, len(raw), 2)) if len(raw) == 12 else None
-
-
-def _hexstr_to_bytes(raw):
-    raw = str(raw or "")
-    return bytes(int(raw[i:i + 2], 16) for i in range(0, len(raw), 2))
+    if len(raw) != 12:
+        return None
+    try:
+        int(raw, 16)
+    except ValueError:
+        return None
+    return ":".join(raw[i:i + 2] for i in range(0, 12, 2))
 
 
 # ---------- модуль ----------
 
 class L2Map:
-    def __init__(self, service):
+    def __init__(self, service: Any):
         self.svc = service
         self._lock = threading.Lock()
-        self.last_ports = []
-        self.last_lldp = []
+        self.last_ports: List[Dict[str, Any]] = []
+        self.last_lldp: List[Dict[str, Any]] = []
         self.scanning = False
-        self._ensure()
+        self._ensure_schema()
 
-    def _ensure(self):
+    def _ensure_schema(self) -> None:
         cols = [r["name"] for r in (self.svc.db.execute(
             "PRAGMA table_info(lan_devices)", fetch=True) or [])]
         if cols and "hostname" not in cols:
@@ -154,7 +172,7 @@ class L2Map:
 
     # ---------- 1. MAC -> порт коммутатора ----------
 
-    def find_switches(self):
+    def find_switches(self) -> List[Dict[str, str]]:
         """Кандидаты в коммутаторы: живые хосты со SNMP."""
         hosts = self.svc.inventory.list_hosts()
         up = [h for h in hosts if h.get("online")]
@@ -162,12 +180,14 @@ class L2Map:
             return [{"name": "192.168.1.1", "ip": "192.168.1.1"}]
         return [{"name": h.get("name"), "ip": h.get("ip")} for h in up]
 
-    def port_map(self, switch_ip, community="public"):
+    def port_map(
+        self, switch_ip: str, community: str = "public"
+    ) -> Dict[str, Dict[str, Any]]:
         """MAC -> {port, if_index, if_name} для одного коммутатора."""
         fdb = snmp_walk(switch_ip, community, OID_FDB_PORT, limit=4000)
         if not fdb:
             return {}
-        ports = {}
+        ports: Dict[str, int] = {}
         for oid, val in fdb:
             mac = mac_iso(oid.split(".")[-6:])
             if not mac:
@@ -177,29 +197,28 @@ class L2Map:
             except (TypeError, ValueError):
                 continue
 
-        # индекс порта -> ifIndex
-        port_if = {}
-        pi = snmp_walk(switch_ip, community, OID_PORT_IFINDEX, limit=500)
-        for oid, val in pi:
+        # Индекс порта -> ifIndex.
+        port_if: Dict[int, int] = {}
+        for oid, val in snmp_walk(switch_ip, community, OID_PORT_IFINDEX,
+                                  limit=500):
             idx = oid.split(".")[-1]
             try:
                 port_if[int(idx)] = int(val)
             except (TypeError, ValueError):
                 continue
 
-        # ifIndex -> имя
-        ifnames = {}
+        # ifIndex -> имя.
+        ifnames: Dict[int, str] = {}
         for walk_oid in (OID_IFNAME, OID_IFDESCR):
-            for oid, val in snmp_walk(switch_ip, community, walk_oid, limit=500):
+            for oid, val in snmp_walk(switch_ip, community, walk_oid,
+                                      limit=500):
                 try:
                     idx = int(oid.rsplit(".", 1)[-1])
                 except (TypeError, ValueError):
                     continue
-                if names := ifnames.get(idx):
-                    if not names and val:
-                        ifnames[idx] = str(val)[:32]
-                else:
-                    ifnames[idx] = str(val)[:32]
+                if ifnames.get(idx):
+                    continue
+                ifnames[idx] = str(val)[:32]
 
         out = {}
         for mac, port in ports.items():
@@ -208,12 +227,13 @@ class L2Map:
                 "mac": mac,
                 "port": port,
                 "if_index": if_index,
-                "if_name": (ifnames.get(if_index) if if_index is not None else None)
+                "if_name": (ifnames.get(if_index)
+                            if if_index is not None else None)
                            or f"port {port}",
             }
         return out
 
-    def scan_ports(self):
+    def scan_ports(self) -> Dict[str, Any]:
         """Обновляет l2_ports по живым коммутаторам с SNMP."""
         cfg = self.svc.cfg.get("infra", {})
         community = cfg.get("community", "public")
@@ -223,11 +243,11 @@ class L2Map:
             if not infra_ping(ip):
                 continue
             try:
-                pm = self.port_map(ip, community)
+                port_map = self.port_map(ip, community)
             except Exception as e:
                 logger.debug("port_map %s: %s", ip, e)
                 continue
-            for mac, info in pm.items():
+            for mac, info in port_map.items():
                 self.svc.db.execute(
                     """INSERT INTO l2_ports (timestamp, mac, switch_ip, if_index, if_name)
                        VALUES (?,?,?,?,?)
@@ -243,7 +263,7 @@ class L2Map:
         self.scanning = False
         return {"ok": True, "ports": len(all_ports), "errors": len(errors)}
 
-    def ports_for(self, mac):
+    def ports_for(self, mac: str) -> List[Dict[str, Any]]:
         mac = mac_iso(str(mac or "").lower())
         if not mac:
             return []
@@ -254,20 +274,19 @@ class L2Map:
 
     # ---------- 2. LLDP / CDP соседи ----------
 
-    def lldp_neighbors(self, prefer="192.168.1.1", community="public"):
+    def lldp_neighbors(
+        self, prefer: str = "192.168.1.1", community: str = "public"
+    ) -> List[Dict[str, Any]]:
         """Соседи устройства по LLDP-MIB. Возврат списка словарей."""
         rows = snmp_walk(prefer, community, OID_LLDP_CHASSIS, limit=800)
         if not rows:
             return []
-        portids = dict((k, v) for k, v
-                       in snmp_walk(prefer, community, OID_LLDP_PORTID, limit=800))
-        sysnames = dict((k, v) for k, v
-                        in snmp_walk(prefer, community, OID_LLDP_SYSNAME, limit=800))
+        portids = dict(snmp_walk(prefer, community, OID_LLDP_PORTID, limit=800))
+        sysnames = dict(snmp_walk(prefer, community, OID_LLDP_SYSNAME, limit=800))
         out = []
         for oid, chassis in rows:
             oid_head = oid.replace(OID_LLDP_CHASSIS, "", 1)
             try:
-                # размер длины chassis-строка: последний предаиндекс
                 parts = oid_head.strip(".").split(".")
                 if len(parts) < 3:
                     continue
@@ -288,7 +307,7 @@ class L2Map:
 
     # ---------- 3. PTR-резолв имён ----------
 
-    def resolve_ptrs(self):
+    def resolve_ptrs(self) -> int:
         """PTR-резолв для lan_devices без hostname. Возвращает число обновлений."""
         rows = self.svc.db.execute(
             """SELECT ip FROM lan_devices WHERE hostname IS NULL OR hostname = '-'
@@ -309,14 +328,14 @@ class L2Map:
 
     # ---------- жизненный цикл ----------
 
-    def scan(self):
+    def scan(self) -> Dict[str, Any]:
         if self.scanning:
             return {"ok": True, "skipped": True}
         self.scanning = True
         self.resolve_ptrs()
         return self.scan_ports()
 
-    def status(self):
+    def status(self) -> Dict[str, Any]:
         return {
             "ports": len(self.last_ports),
             "lldp": len(self.last_lldp),

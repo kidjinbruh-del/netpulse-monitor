@@ -1,0 +1,6 @@
+{# Карточка метрики: title, value, sub, field (ключ для live-обновления) #}
+<div class="srv-card">
+  <div class="k">{{ title }}</div>
+  <div class="v" {% if field %}data-srv="{{ field }}"{% endif %}>{{ value }}</div>
+  {% if sub %}<div class="s">{{ sub }}</div>{% endif %}
+</div>

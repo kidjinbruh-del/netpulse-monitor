@@ -1,8 +1,4 @@
 """
-Тесты Network Monitor Pro.
-Запуск: python -m tests.run  (или pytest tests/)
+Тесты NetPulse v3.
+Запуск: pytest tests/unit tests/integration
 """
-
-from . import test_core
-
-__all__ = ['test_core']

@@ -75,6 +75,19 @@ function timeAgo(ts) {
 
 /* ================= графики ================= */
 
+/* Минимальный потолок шкалы (KB/s): тихий плоский трафик рисуем внизу,
+   а не раздуваем автомасштабом к верхнему краю */
+const CHART_FLOOR_KBPS = 100;
+/* Окно скролла главного графика, секунд */
+const CHART_WIN_SEC = 300;
+/* 95-й перцентиль: шкала игнорирует единичные выбросы (фон всегда виден),
+   затяжная смена режима подхватывается сама */
+function p95(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(0.95 * s.length))];
+}
+
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
 }
@@ -98,9 +111,9 @@ function drawGrid(ctx, w, h, rows = 4) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
   }
 }
-function areaSeries(ctx, w, h, values, color, maxOverride = null) {
+function areaSeries(ctx, w, h, values, color, maxOverride = null, minMax = 0) {
   if (!values.length) return;
-  const max = Math.max(maxOverride || 0, ...values.map(v => v ?? 0), 1) * 1.15;
+  const max = Math.max(maxOverride || 0, minMax, ...values.map(v => v ?? 0), 1) * 1.15;
   const step = w / Math.max(values.length - 1, 1);
   const pts = values.map((v, i) => [i * step, h - ((v ?? 0) / max) * h * 0.92]);
   const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -116,32 +129,178 @@ function areaSeries(ctx, w, h, values, color, maxOverride = null) {
   ctx.beginPath(); ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
   ctx.fillStyle = color; ctx.fill();
 }
-function drawSpark(cvId, values, color) {
+function drawSpark(cvId, values, color, maxOverride = null) {
   const cv = $(cvId);
   if (!cv || !values.length) return;
   const { ctx, w, h } = prepCanvas(cv);
   ctx.clearRect(0, 0, w, h);
-  areaSeries(ctx, w, h, values.slice(-60), color);
+  areaSeries(ctx, w, h, values.slice(-60), color, maxOverride, CHART_FLOOR_KBPS);
 }
+/* 95-й перцентиль: шкала графиков игнорирует единичные всплески —
+   они рисуются обрезанными у потолка, а масштаб не прыгает */
+function pct95(vals) {
+  const s = vals.filter(v => v != null).slice().sort((a, b) => a - b);
+  if (!s.length) return 0;
+  return s[Math.min(s.length - 1, Math.floor(s.length * 0.95))];
+}
+/* Формат TwitchTracker: линии + пунктирное среднее + столбцы событий снизу,
+   подписи MAX/AVG слева, ось времени, легенда в HTML под графиком */
 function drawMainChart(data, forecast) {
   const cv = $("chart-main"); if (!cv) return;
   const { ctx, w, h } = prepCanvas(cv);
   ctx.clearRect(0, 0, w, h);
-  drawGrid(ctx, w, h, 4);
-  const downs = data.map(p => p.down_kbps);
-  const ups = data.map(p => p.up_kbps);
-  const commonMax = Math.max(...downs, ...ups, ...(forecast ? [forecast] : []), 10) * 1.15;
-  areaSeries(ctx, w, h, downs, cssVar("--cyan"), commonMax);
-  areaSeries(ctx, w, h, ups, cssVar("--violet"), commonMax);
-  if (forecast != null && data.length > 5) {
-    const lastX = (data.length - 1) / Math.max(data.length - 1, 1) * w;
-    const step = w / Math.max(data.length - 1, 1);
-    ctx.beginPath();
-    ctx.setLineDash([6, 5]);
-    ctx.moveTo(lastX, h - (data[data.length - 1].down_kbps / commonMax) * h * 0.92);
-    ctx.lineTo(Math.min(w, lastX + step * 30), h - (forecast / commonMax) * h * 0.92);
-    ctx.strokeStyle = cssVar("--amber"); ctx.stroke();
+  const n = data.length;
+  const padL = 46, padR = 8, padT = 10, padB = 20;
+  const plotW = Math.max(10, w - padL - padR);
+  const mut = cssVar("--muted");
+  ctx.font = "10px system-ui";
+  if (n < 2) {
+    /* пустое состояние вместо голого canvas */
+    ctx.fillStyle = mut; ctx.textAlign = "center";
+    ctx.fillText("сбор данных…", padL + plotW / 2, h / 2);
+    return;
+  }
+  const barZone = Math.round((h - padT - padB) * 0.26);
+  const lineTop = padT, lineBot = h - padB - barZone;
+  const lineH = Math.max(10, lineBot - lineTop);
+  const downs = data.map(p => p.down_kbps ?? 0);
+  const ups = data.map(p => p.up_kbps ?? 0);
+  const alerts = data.map(p => p.alerts_unread ?? 0);
+  /* Ось X — время со скроллом влево: окно CHART_WIN_SEC секунд, старые точки
+     уходят за левый край; правый край всегда «сейчас» */
+  const tEnd = data[n - 1].ts || 0;
+  let tStart = 0, X;
+  if (tEnd > 0) {
+    tStart = Math.max(data[0].ts || tEnd, tEnd - CHART_WIN_SEC);
+    const span = Math.max(1, tEnd - tStart);
+    X = ts => padL + (((ts || tStart) - tStart) / span) * plotW;
+  } else { /* нет меток времени — раскладка по индексам */
+    X = (_, i) => padL + (i / Math.max(n - 1, 1)) * plotW;
+  }
+  const XX = (p, i) => tEnd > 0 ? X(p.ts || tStart) : X(null, i);
+  /* Шкала по p95 окна: единичные всплески рисуются обрезанными у потолка,
+     но масштаб не прыгает и график не «умирает» после всплеска */
+  const commonMax = Math.max(pct95(downs.concat(ups)), CHART_FLOOR_KBPS,
+    ...(forecast ? [forecast] : []), 10) * 1.15;
+  const Y = v => lineBot - (Math.min(v, commonMax) / commonMax) * lineH;
+
+  /* пунктирная сетка + подписи MAX/AVG слева */
+  const avg = downs.reduce((a, b) => a + b, 0) / n;
+  ctx.font = "10px system-ui"; ctx.textAlign = "left";
+  const gridLine = (y, label, color) => {
+    ctx.beginPath(); ctx.setLineDash([5, 5]);
+    ctx.moveTo(padL, y); ctx.lineTo(w - padR, y);
+    ctx.strokeStyle = cssVar("--border-soft"); ctx.lineWidth = 1; ctx.stroke();
     ctx.setLineDash([]);
+    if (label) {
+      ctx.fillStyle = color || mut;
+      ctx.fillText(label, 2, Math.min(lineBot, Math.max(lineTop + 8, y - 3)));
+    }
+  };
+  gridLine(lineTop + 1, "MAX " + fmtNum(commonMax / 1.15), cssVar("--cyan"));
+  gridLine(Y(avg), "AVG " + fmtNum(avg), cssVar("--amber"));
+  gridLine(lineBot, null);
+
+  /* столбцы: новые алерты за временной бакет (второй слой информации) */
+  const NB = 60;
+  const buckets = new Array(NB).fill(0);
+  if (tEnd > 0) {
+    const span = Math.max(1, tEnd - tStart);
+    data.forEach((p, i) => {
+      const prev = i > 0 ? (data[i - 1].alerts_unread ?? 0) : (p.alerts_unread ?? 0);
+      const d = Math.max(0, (p.alerts_unread ?? 0) - prev);
+      if (d > 0) {
+        const b = Math.min(NB - 1,
+          Math.floor((((p.ts || tStart) - tStart) / span) * NB));
+        buckets[b] += d;
+      }
+    });
+  } else {
+    const per = Math.max(1, Math.floor(n / NB));
+    for (let b = 0; b < NB; b++) {
+      const s = b * per, e = Math.min(n, (b + 1) * per);
+      const a0 = alerts[s] ?? 0, a1 = alerts[e - 1] ?? 0;
+      buckets[b] = Math.max(0, a1 - (b === 0 ? a0 : (alerts[s - 1] ?? a0)));
+    }
+  }
+  const barMax = Math.max(1, ...buckets);
+  const bw = plotW / NB;
+  /* клип: уходящие влево линии/столбцы не лезут на подписи и за края */
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(padL, lineTop - 4, plotW, (h - padB) - (lineTop - 4));
+  ctx.clip();
+  ctx.fillStyle = cssVar("--danger"); ctx.globalAlpha = 0.7;
+  buckets.forEach((cnt, b) => {
+    if (!cnt) return;
+    const bh = Math.max(2, (cnt / barMax) * (barZone - 2));
+    const bx = padL + b * bw + bw * 0.22;
+    ctx.fillRect(bx, h - padB - bh, Math.max(2, bw * 0.56), bh);
+  });
+  ctx.globalAlpha = 1;
+
+  /* линии с заливкой */
+  const series = (key, color) => {
+    const grad = ctx.createLinearGradient(0, lineTop, 0, lineBot);
+    grad.addColorStop(0, color + "44"); grad.addColorStop(1, color + "00");
+    ctx.beginPath(); ctx.moveTo(XX(data[0], 0), lineBot);
+    data.forEach((p, i) => ctx.lineTo(XX(p, i), Y(p[key] ?? 0)));
+    ctx.lineTo(XX(data[n - 1], n - 1), lineBot); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.beginPath();
+    data.forEach((p, i) => (i ? ctx.lineTo(XX(p, i), Y(p[key] ?? 0)) : ctx.moveTo(XX(p, i), Y(p[key] ?? 0))));
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+    const last = data[n - 1];
+    ctx.beginPath(); ctx.arc(XX(last, n - 1), Y(last[key] ?? 0), 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = color; ctx.fill();
+  };
+  series("down_kbps", cssVar("--cyan"));
+  series("up_kbps", cssVar("--violet"));
+
+  /* пунктир среднего по окну */
+  ctx.beginPath(); ctx.setLineDash([3, 4]);
+  ctx.moveTo(padL, Y(avg)); ctx.lineTo(w - padR, Y(avg));
+  ctx.strokeStyle = cssVar("--amber"); ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.setLineDash([]);
+
+  /* короткий прогноз вправо от последней точки */
+  if (forecast != null && n > 5) {
+    const last = data[n - 1];
+    const x0 = XX(last, n - 1);
+    let x1;
+    if (tEnd > 0) {
+      const span = Math.max(1, tEnd - tStart);
+      const stepT = span / Math.max(n - 1, 1);
+      x1 = Math.min(w - padR, x0 + (12 * stepT / span) * plotW);
+    } else {
+      const step = plotW / Math.max(n - 1, 1);
+      x1 = Math.min(w - padR, x0 + step * 12);
+    }
+    ctx.beginPath(); ctx.setLineDash([6, 5]);
+    ctx.moveTo(x0, Y(last.down_kbps ?? 0));
+    ctx.lineTo(x1, Y(forecast));
+    ctx.strokeStyle = cssVar("--amber"); ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore(); /* конец клипа линий/столбцов/прогноза */
+
+  /* ось времени: метки каждую минуту */
+  ctx.fillStyle = mut; ctx.textAlign = "center";
+  if (tEnd > 0) {
+    const tstr = t => new Date(t * 1000)
+      .toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    for (let t = Math.ceil(tStart / 60) * 60; t <= tEnd; t += 60)
+      ctx.fillText(tstr(t), X(t), h - 6);
+    if ((tEnd - tStart) < 60) ctx.fillText(tstr(tEnd), X(tEnd), h - 6);
+  } else {
+    const tss = data.map(p => (p.ts || 0) * 1000);
+    const tstr = t => t > 0
+      ? new Date(t).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "";
+    const ticks = n > 1 ? [0, 0.25, 0.5, 0.75, 1] : [0];
+    ticks.forEach(f => {
+      const i = Math.min(n - 1, Math.round(f * (n - 1)));
+      ctx.fillText(tstr(tss[i]), XX(data[i], i), h - 6);
+    });
   }
 }
 function drawGauge(score, color) {
@@ -365,10 +524,49 @@ const UI = {
     } catch (e) { void e; }
   },
 
+  /* Адаптивный потолок шкалы графиков: вверх — мгновенно за всплеском,
+     вниз — плавное затухание (полураспад ~45с). Убирает циклические прыжки
+     масштаба, когда всплеск входит/уходит из скользящего окна. */
+  _ceil(key, target) {
+    const now = performance.now() / 1000;
+    this._ceils = this._ceils || {};
+    const prev = this._ceils[key] || { v: 0, ts: now };
+    const dt = Math.min(120, Math.max(0.1, now - prev.ts));
+    const decayed = prev.v * Math.pow(0.5, dt / 45);
+    const v = Math.max(target, decayed);
+    this._ceils[key] = { v, ts: now };
+    return v;
+  },
+
+  /* Полоска скорости относительно пика сессии: норма / близко к пику / пик */
+  _meter(which, cur) {
+    const peakKey = "_peak" + which;
+    this[peakKey] = Math.max(this[peakKey] || 0, cur || 0);
+    const peak = this[peakKey];
+    const pct = peak > 0 ? Math.min(100, Math.round((cur / peak) * 100)) : 0;
+    const cls = pct >= 95 && peak > 0 ? "over" : pct >= 70 ? "warn" : "";
+    const bar = $("bar-" + which), lab = $("bar-" + which + "-pct");
+    if (bar) { bar.style.width = pct + "%"; bar.className = cls; }
+    if (lab) lab.textContent = peak > 0 ? pct + "%" : "—";
+    const val = $("st-" + which);
+    if (val) val.classList.toggle("st-warn", cls === "warn"),
+             val.classList.toggle("st-over", cls === "over");
+  },
+
+  async loadWhoami() {
+    try {
+      const u = await apiGet("whoami");
+      $("whoami").textContent = "👤 " + (u.user || "?") +
+        (u.auth_enabled ? "" : " · локальный режим");
+    } catch (e) { void e; }
+  },
+
   /* ---------- рендер состояния ---------- */
   renderState(snap) {
     $("st-down").innerHTML = `${fmtNum(snap.down_kbps)}<span class="unit"> KB/s</span>`;
     $("st-up").innerHTML = `${fmtNum(snap.up_kbps)}<span class="unit"> KB/s</span>`;
+    this._meter("down", snap.down_kbps);
+    this._meter("up", snap.up_kbps);
 
     const pingEl = $("st-ping");
     pingEl.innerHTML =
@@ -416,6 +614,24 @@ const UI = {
       $("fc-note").classList.remove("hidden");
       $("fc-note").textContent =
         `прогноз AI: ${fmtNum(snap.forecast.predicted_kbps_5min)} KB/s`;
+    } else {
+      const fp = snap.forecast_progress;
+      const need = (fp && fp.need) || 30;
+      let have;
+      if (fp && fp.have != null) {
+        have = fp.have;           // серверное значение (hub после рестарта)
+        this._fpTicks = 0;
+      } else {
+        this._fpTicks = Math.min(((this._fpTicks || 0) + 1), need);
+        have = this._fpTicks;     // фолбэк: тики страницы ≈ точки истории
+      }
+      const pct = Math.min(100, Math.round((have / need) * 100));
+      const left = Math.max(0, need - have);
+      $("dash-forecast").className = "kv ai-progress";
+      $("dash-forecast").innerHTML =
+        `<div class="quota-bar"><i style="width:${pct}%"></i></div>` +
+        `<span class="muted">собираем данные… ${have}/${need} (осталось ~${left}с)</span>`;
+      $("fc-note").classList.add("hidden");
     }
 
     if (snap.quota) {
@@ -437,11 +653,20 @@ const UI = {
 
     this.stateHistory.push(snap);
     if (this.stateHistory.length > 240) this.stateHistory.shift();
-    drawSpark("spark-down", this.stateHistory.map(s => s.down_kbps), cssVar("--cyan"));
-    drawSpark("spark-up", this.stateHistory.map(s => s.up_kbps), cssVar("--violet"));
+    const histDown = this.stateHistory.map(s => s.down_kbps);
+    const histUp = this.stateHistory.map(s => s.up_kbps);
+    drawSpark("spark-down", histDown, cssVar("--cyan"),
+      this._ceil("down", Math.max(CHART_FLOOR_KBPS, ...histDown.slice(-60))));
+    drawSpark("spark-up", histUp, cssVar("--violet"),
+      this._ceil("up", Math.max(CHART_FLOOR_KBPS, ...histUp.slice(-60))));
     if (this.currentView === "dashboard") {
-      drawMainChart(this.stateHistory.slice(-180),
-        snap.forecast ? snap.forecast.predicted_kbps_5min : null);
+      const win = this.stateHistory.slice(-180);
+      const wmax = Math.max(CHART_FLOOR_KBPS,
+        ...win.map(p => p.down_kbps ?? 0), ...win.map(p => p.up_kbps ?? 0),
+        snap.forecast ? snap.forecast.predicted_kbps_5min : 0);
+      drawMainChart(win,
+        snap.forecast ? snap.forecast.predicted_kbps_5min : null,
+        this._ceil("main", wmax));
     }
 
     if (this.lastAlertCount !== null && snap.alerts_unread > this.lastAlertCount
@@ -1593,21 +1818,34 @@ const UI = {
     try {
       const [h, r] = await Promise.all([
         apiGet("hosts"), apiGet("journalreport?days=1")]);
-      const worst = h.hosts.filter(x => x.health_score < 80)
-        .sort((a, b) => a.health_score - b.health_score).slice(0, 3);
-      let html = "";
-      if (worst.length)
-        html += worst.map(m => {
-          const c = m.health_score >= 50 ? "#f5b942" : "#ff5c74";
-          return `${esc(m.name)}: <span style="color:${c};font-weight:600">${m.health_score}</span>`;
-        }).join("<br>");
-      else
-        html += `<span class="muted">парк здоров</span>`;
-      const offline = h.hosts.filter(x => !x.online).length;
-      if (offline)
-        html += `<br><span style="color:#ff5c74">офлайн: ${offline}</span>`;
+      const hosts = h.hosts || [];
+      const bad = hosts.filter(x => (x.health_score ?? 100) < 80)
+        .sort((a, b) => (a.health_score ?? 100) - (b.health_score ?? 100));
+      const badIds = new Set(bad.map(x => x.id ?? x.name));
+      const off = hosts.filter(x => !x.online && !badIds.has(x.id ?? x.name));
+      const rows = bad.concat(off).slice(0, 6);
+      const dot = m => {
+        if (!m.online) return ["bad", "ОФЛАЙН"];
+        const s = m.health_score ?? 100;
+        return s >= 80 ? ["ok", "ОК"] : s >= 50 ? ["warn", "WARN"] : ["bad", "КРИТ"];
+      };
+      let html;
+      if (rows.length) {
+        html = `<table class="dash-park"><tbody>` + rows.map(m => {
+          const [cls, tag] = dot(m);
+          const score = m.online
+            ? `<b>${esc(String(m.health_score ?? "—"))}</b> <span class="st-tag ${cls}">${tag}</span>`
+            : `<span class="st-tag ${cls}">${tag}</span>`;
+          return `<tr><td><span class="st-dot ${cls}"></span><b>${esc(m.name || "?")}</b></td>` +
+            `<td class="mono muted">${esc(m.ip || "—")}</td>` +
+            `<td style="text-align:right">${score}</td></tr>`;
+        }).join("") + `</tbody></table>`;
+      } else {
+        html = `<span class="muted">парк здоров · машин: ${hosts.length}</span>`;
+      }
       html += `<br>Журнал за сутки: <b>${r.entries ?? 0}</b> (${r.minutes ?? 0} мин)`;
       $("dash-platform").innerHTML = html;
+      $("dash-platform").classList.remove("muted");
     } catch (e) { void e; }
   },
 

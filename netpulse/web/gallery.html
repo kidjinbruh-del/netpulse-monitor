@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetPulse · Дашборд-галерея</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>
+  body { margin: 0; background: #0b0f16; color: #dbe4f0; font-family: system-ui, sans-serif; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 22px 14px 60px; }
+  .hdr { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .hdr a { color: var(--cyan); text-decoration: none; font-size: 13px; }
+  .hdr h1 { margin: 0; font-size: 22px; font-weight: 700; }
+  .hdr .sub { font-size: 12px; color: var(--muted); margin: 2px 0 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border);
+          border-radius: var(--r-lg); padding: 14px; box-shadow: var(--shadow); }
+  .card .cap { font-size: 11.5px; color: var(--muted); text-transform: uppercase;
+               letter-spacing: .05em; margin-bottom: 8px; }
+  .card img { width: 100%; height: auto; border-radius: 8px;
+              border: 1px solid var(--border-soft); display: block; }
+  .card .note { font-size: 12px; color: var(--muted); line-height: 1.45; margin-top: 8px; }
+  .chip { display: inline-block; font-size: 10px; font-weight: 700; border-radius: 6px;
+          padding: 2px 8px; letter-spacing: .05em; margin-left: 6px; }
+  .chip.done { background: rgba(34,211,167,.15); color: var(--cyan); }
+  @media (max-width: 720px) { .hdr h1 { font-size: 18px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <a href="/index.html">← NetPulse</a>
+    <h1>Галерея дашборда</h1>
+  </div>
+  <div class="sub">Развитие интерфейса решётки и дашборда. Скриншоты — в хронологическом порядке.</div>
+
+  <div class="grid">
+
+    <div class="card">
+      <div class="cap">Было: топология (v2.3.1)</div>
+      <img src="/screens/mesh-topo.png" alt="Топология решётки">
+      <div class="note">SVG force-рендер: узлы, рёбра, панель деталей по клику. Полоски расталкивают узлы.</div>
+    </div>
+
+    <div class="card">
+      <div class="cap">Нагрузка на шкалу (до правок)</div>
+      <img src="/screens/chart-jump.gif" alt="Проблема циклического масштаба">
+      <div class="note">Индексная ось X + max-of-window = цикл «в пик уходит вверх, в тишине плющится». Источник бага.</div>
+    </div>
+
+    <div class="card">
+      <div class="cap">Нагрузка на шкалу (p95 + floor 100)</div>
+      <img src="/screens/chart-p95.png" alt="Шкала p95">
+      <div class="note">95-й перцентиль вместо max: выбросы обрезаны у потолка, фон виден, циклов масштаба нет.</div>
+    </div>
+
+    <div class="card">
+      <div class="cap">Скролл по времени (5 мин)</div>
+      <img src="/screens/chart-scroll.png" alt="График со скроллом по времени">
+      <div class="note">Ось X — время, правый край = «сейчас», старые точки уходят за левый край. TwitchTracker‑стиль.</div>
+    </div>
+
+    <div class="card">
+      <div class="cap">Финал: TwitchTracker‑график</div>
+      <img src="/screens/chart-twitch.png" alt="График в стиле TwitchTracker">
+      <div class="note">Линии + пунктирное AVG + столбцы алертов снизу + подписи MAX/AVG слева + минутная ось времени.</div>
+    </div>
+
+    <div class="card">
+      <div class="cap">Дашборд: полоски + сессия 2×2 + таблица парка</div>
+      <img src="/screens/dash-final.png" alt="Итоговый дашборд">
+      <div class="note">Полоски скорости с цветом (🟢 норма, 🟡 близко к пику, 🔴 пик), сетка сессии 2×2 с крупными цифрами, таблица парка с иконками статуса.</div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

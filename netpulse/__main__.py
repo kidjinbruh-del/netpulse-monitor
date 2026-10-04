@@ -1,31 +1,49 @@
 """
-Точка входа: python -m netpulse [--port 8770]
+Точка входа NetPulse v3: python -m netpulse [--port 8770]
+
+Порядок запуска:
+  1. Загрузить конфигурацию (config.json + DEFAULTS + validate)
+  2. Создать AppContext и выполнить startup (БД, сервисы)
+  3. Создать FastAPI-приложение и запустить uvicorn
+  4. При остановке — graceful shutdown через AppContext
 """
 
 import sys
-from .config import load_config
-from . import server
-import logging
 
-logger = logging.getLogger(__name__)
+from netpulse import __version__
+from netpulse.config import load_config
+from netpulse.context import AppContext, set_global_context
+from netpulse.server.main import create_app
 
-def main():
-    server.setup_logging()
+
+def main() -> None:
     args = sys.argv[1:]
     config = load_config()
+
     if "--port" in args:
         try:
-            config["web_port"] = int(args[args.index("--port") + 1])
+            config.web.port = int(args[args.index("--port") + 1])
         except (ValueError, IndexError):
-            logger.info("использование: python -m netpulse [--port 8770]")
+            print("использование: python -m netpulse [--port 8770]")
             sys.exit(1)
 
-    logger.info("=" * 50)
-    logger.info(f"NETPULSE v{__import__('netpulse', fromlist=['__version__']).__version__}")
-    logger.info("Сетевой центр мониторинга | Ctrl+C - выход")
-    logger.info("=" * 50)
+    with AppContext(config) as ctx:
+        set_global_context(ctx)
+        ctx.logger.info("=" * 50)
+        ctx.logger.info(f"NETPULSE v{__version__}")
+        ctx.logger.info("Сетевой центр мониторинга | Ctrl+C - выход")
+        ctx.logger.info("=" * 50)
 
-    server.run(config)
+        app = create_app(config, ctx)
+
+        import uvicorn
+        uvicorn.run(
+            app,
+            host=config.web.host,
+            port=config.web.port,
+            log_config=None,
+            access_log=False,
+        )
 
 
 if __name__ == "__main__":

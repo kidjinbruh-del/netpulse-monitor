@@ -1,5 +1,5 @@
-"""
-Runbook Runner: типовые операции отдела как «кнопки».
+"""Runbook Runner: типовые операции отдела как «кнопки».
+
 Определения — JSON-файлы в netpulse/runbooks/*.json:
 {
   "id": "restart-spooler",
@@ -11,7 +11,11 @@ Runbook Runner: типовые операции отдела как «кнопк
 }
 Параметры строго [A-Za-z0-9._-] — никаких кавычек и pipe. Каждый запуск
 пишется в runbook_log (кто, когда, код выхода, хвост вывода).
+
+v3-реализация: тот же контракт RunbookRunner(service), типизировано.
+service обязан давать .db; опционально .push_alert/.inventory.
 """
+from __future__ import annotations
 
 import json
 import logging
@@ -22,6 +26,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.utils import decode_process_output
 
@@ -33,7 +38,7 @@ PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 EXEC_TIMEOUT = 120
 
 
-def _now_iso():
+def _now_iso() -> str:
     return datetime.now().isoformat()
 
 
@@ -60,48 +65,48 @@ EXAMPLE_DISKS = {
 
 
 class RunbookRunner:
-    def __init__(self, service):
+    def __init__(self, service: Any):
         self.svc = service
         self._lock = threading.Lock()
-        self._defs = {}
+        self._defs: Dict[str, Dict[str, Any]] = {}
         self.load()
 
     # ---------- загрузка ----------
 
-    def load(self):
+    def load(self) -> Dict[str, Any]:
         with self._lock:
             self._defs = {}
             try:
                 if not os.path.isdir(RB_DIR):
                     os.makedirs(RB_DIR, exist_ok=True)
-                    for ex in (EXAMPLE_SPOOLER, EXAMPLE_DISKS):
-                        path = os.path.join(RB_DIR, f"{ex['id']}.json")
+                    for example in (EXAMPLE_SPOOLER, EXAMPLE_DISKS):
+                        path = os.path.join(RB_DIR, f"{example['id']}.json")
                         with open(path, "w", encoding="utf-8") as f:
-                            json.dump(ex, f, ensure_ascii=False, indent=2)
+                            json.dump(example, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 logger.warning("Не удалось создать примеры runbook: %s", e)
 
             try:
-                for fn in sorted(os.listdir(RB_DIR)):
-                    if not fn.endswith(".json"):
+                for filename in sorted(os.listdir(RB_DIR)):
+                    if not filename.endswith(".json"):
                         continue
                     try:
-                        with open(os.path.join(RB_DIR, fn),
+                        with open(os.path.join(RB_DIR, filename),
                                   encoding="utf-8") as f:
                             rb = json.load(f)
-                        rid = str(rb.get("id") or fn[:-5])
+                        rid = str(rb.get("id") or filename[:-5])
                         rb["id"] = rid
                         self._defs[rid] = rb
                     except Exception as e:
-                        logger.warning("Runbook %s битый: %s", fn, e)
+                        logger.warning("Runbook %s битый: %s", filename, e)
             except Exception as e:
                 logger.warning("Каталог runbooks недоступен: %s", e)
         return {"ok": True, "count": len(self._defs)}
 
-    def reload(self):
+    def reload(self) -> Dict[str, Any]:
         return self.load()
 
-    def list(self):
+    def list(self) -> List[Dict[str, Any]]:
         return [{
             "id": rb["id"], "name": rb.get("name", rb["id"]),
             "description": rb.get("description", ""),
@@ -111,15 +116,17 @@ class RunbookRunner:
 
     # ---------- выполнение ----------
 
-    def _validate_params(self, rb, params):
-        clean = {}
+    def _validate_params(
+        self, rb: Dict[str, Any], params: Optional[Dict[str, Any]]
+    ) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+        clean: Dict[str, str] = {}
         declared = rb.get("params") or []
         names = {p.get("name"): bool(p.get("required")) for p in declared}
-        for k, v in (params or {}).items():
-            v = str(v).strip()
-            if not PARAM_RE.match(k) or not PARAM_RE.match(v):
-                return None, f"недопустимый параметр {k}"
-            clean[k] = v
+        for key, value in (params or {}).items():
+            value = str(value).strip()
+            if not PARAM_RE.match(key) or not PARAM_RE.match(value):
+                return None, f"недопустимый параметр {key}"
+            clean[key] = value
         for pname, required in names.items():
             if required and pname not in clean:
                 return None, f"не хватает параметра {pname}"
@@ -128,7 +135,40 @@ class RunbookRunner:
             return None, f"лишние параметры: {', '.join(sorted(unknown))}"
         return clean, None
 
-    def execute(self, rb_id, params=None, actor="admin"):
+    def _render_command(
+        self, rb: Dict[str, Any], clean: Dict[str, str], host: str
+    ) -> Tuple[Optional[list], Optional[str]]:
+        scope = rb.get("scope", "local")
+        command = str(rb.get("command", ""))
+        placeholders = set(PLACEHOLDER_RE.findall(command))
+        missing = placeholders - set(clean)
+        if missing:
+            return None, f"не заданы плейсхолдеры: {', '.join(missing)}"
+        try:
+            # Заменяем только известные {плейсхолдеры}, скобки PowerShell
+            # (например @{n='FreeGB'}) не трогаем.
+            rendered = PLACEHOLDER_RE.sub(
+                lambda m: clean.get(m.group(1), m.group(0)), command)
+        except Exception as e:
+            return None, f"шаблон команды битый: {e}"
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        if scope == "remote":
+            if not host:
+                return None, "для remote нужен host"
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                   f"Invoke-Command -ComputerName {host} "
+                   f"-ScriptBlock {{ {rendered} }}"]
+        else:
+            cmd = ["powershell", "-NoProfile", "-NonInteractive",
+                   "-Command", rendered]
+        return (cmd, flags), None
+
+    def execute(
+        self,
+        rb_id: str,
+        params: Optional[Dict[str, Any]] = None,
+        actor: str = "admin",
+    ) -> Dict[str, Any]:
         rb = self._defs.get(str(rb_id))
         if not rb:
             return {"ok": False, "error": "runbook не найден"}
@@ -136,33 +176,11 @@ class RunbookRunner:
         if err:
             return {"ok": False, "error": err}
 
-        scope = rb.get("scope", "local")
-        command = str(rb.get("command", ""))
         host = clean.get("host", "")
-        placeholders = set(PLACEHOLDER_RE.findall(command))
-        missing = placeholders - set(clean)
-        if missing:
-            return {"ok": False,
-                    "error": f"не заданы плейсхолдеры: {', '.join(missing)}"}
-
-        try:
-            # Заменяем только известные {плейсхолдеры}, скобки PowerShell
-            # (например @{n='FreeGB'}) не трогаем
-            rendered = PLACEHOLDER_RE.sub(
-                lambda m: clean.get(m.group(1), m.group(0)), command)
-        except Exception as e:
-            return {"ok": False, "error": f"шаблон команды битый: {e}"}
-
-        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        if scope == "remote":
-            if not host:
-                return {"ok": False, "error": "для remote нужен host"}
-            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                   f"Invoke-Command -ComputerName {host} "
-                   f"-ScriptBlock {{ {rendered} }}"]
-        else:
-            cmd = ["powershell", "-NoProfile", "-NonInteractive",
-                   "-Command", rendered]
+        built, err = self._render_command(rb, clean, host)
+        if err:
+            return {"ok": False, "error": err}
+        cmd, flags = built
 
         t0 = time.time()
         exit_code, output = -1, ""
@@ -187,6 +205,13 @@ class RunbookRunner:
 
         ok = exit_code == 0
         name = rb.get("name", rb_id)
+        self._notify(rb_id, name, host, ok, exit_code)
+        return {"ok": ok, "exit_code": exit_code, "seconds": elapsed,
+                "output": output.strip()}
+
+    def _notify(
+        self, rb_id: str, name: str, host: str, ok: bool, exit_code: int
+    ) -> None:
         try:
             self.svc.push_alert(
                 "RUNBOOK_EXEC" if ok else "RUNBOOK_FAIL",
@@ -205,10 +230,7 @@ class RunbookRunner:
         except Exception:
             pass
 
-        return {"ok": ok, "exit_code": exit_code, "seconds": elapsed,
-                "output": output.strip()}
-
-    def recent_log(self, limit=50):
+    def recent_log(self, limit: int = 50) -> List[Dict[str, Any]]:
         limit = min(max(int(limit or 50), 1), 200)
         return self.svc.db.execute(
             """SELECT timestamp, runbook, actor, target, exit_code, output

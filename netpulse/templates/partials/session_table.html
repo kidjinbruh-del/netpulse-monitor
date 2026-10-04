@@ -1,0 +1,23 @@
+{# Сетка 2×2: сессионные счётчики трафика (контекст: state) #}
+<div class="srv-grid">
+  <div class="srv-card">
+    <div class="k">Входящий</div>
+    <div class="v" data-srv="total_down_mb">{{ state.total_down_mb|fmtnum(2) }} МБ</div>
+    <div class="s">down <span data-srv="down_kbps">{{ state.down_kbps|mbps }}</span></div>
+  </div>
+  <div class="srv-card">
+    <div class="k">Исходящий</div>
+    <div class="v" data-srv="total_up_mb">{{ state.total_up_mb|fmtnum(2) }} МБ</div>
+    <div class="s">up <span data-srv="up_kbps">{{ state.up_kbps|mbps }}</span></div>
+  </div>
+  <div class="srv-card">
+    <div class="k">Пинг</div>
+    <div class="v" data-srv="ping">{{ (state.ping.current if state.ping is defined and state.ping.current is not none else 0)|fmtnum(0) }} ms</div>
+    <div class="s">потери <span data-srv="loss">{{ (state.ping.loss_pct if state.ping is defined else 0)|pct }}</span></div>
+  </div>
+  <div class="srv-card">
+    <div class="k">Качество</div>
+    <div class="v" data-srv="quality">{{ state.quality.label if state.quality is defined else "—" }}</div>
+    <div class="s">score <span data-srv="quality_score">{{ state.quality.score if state.quality is defined else "—" }}</span>/100</div>
+  </div>
+</div>

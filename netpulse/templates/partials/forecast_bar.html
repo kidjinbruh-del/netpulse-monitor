@@ -1,0 +1,10 @@
+{# Индикатор прогресса AI-прогноза (контекст: forecast_progress {have, need}) #}
+{% set have = forecast_progress.have if forecast_progress is defined else 0 %}
+{% set need = forecast_progress.need if forecast_progress is defined else 30 %}
+{% set pct = (100 * have / need) if need else 0 %}
+<div class="srv-card">
+  <div class="k">AI-прогноз скорости</div>
+  <div class="v">{{ have }}/{{ need }}</div>
+  <div class="s">точек истории для прогноза</div>
+  <div class="srv-bar"><div style="width: {{ pct|round(0) }}%"></div></div>
+</div>

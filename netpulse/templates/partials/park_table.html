@@ -1,0 +1,18 @@
+{# Таблица парка с иконками статуса (контекст: hosts — список) #}
+<h2>Парк ({{ hosts|length }})</h2>
+<table class="srv-table">
+  <thead><tr><th></th><th>Имя</th><th>IP</th><th>Карма</th><th>Статус</th></tr></thead>
+  <tbody>
+  {% for h in hosts %}
+    <tr>
+      <td><span class="st-dot {{ h.online|status_dot(h.health_score) }}"></span></td>
+      <td>{{ h.name or "?" }}</td>
+      <td>{{ h.ip or "—" }}</td>
+      <td>{{ h.health_score|fmtnum(0) if h.health_score is not none else "—" }}</td>
+      <td>{{ "в сети" if h.online else "не в сети" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">нет данных (inventory degraded)</td></tr>
+  {% endfor %}
+  </tbody>
+</table>

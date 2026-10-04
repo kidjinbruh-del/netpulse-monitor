@@ -1,31 +1,31 @@
-"""
-Утилиты для core модуля
-"""
+"""Утилиты core: права, процессы, декодирование вывода, парсинг ping/trace.
 
+v3-реализация: те же функции, типизировано.
+"""
+from __future__ import annotations
+
+import logging
+import re
 import subprocess
 import sys
-import os
-import re
-import json
-import time
-from datetime import datetime
-import logging
+from typing import Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-def is_admin():
-    """Проверка прав администратора (Windows)"""
+
+def is_admin() -> bool:
+    """Проверка прав администратора (Windows)."""
     try:
         import ctypes
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
 
-def safe_kill_process(process, timeout=3):
-    """Безопасное завершение процесса"""
+
+def safe_kill_process(process: Any, timeout: float = 3) -> None:
+    """Безопасное завершение процесса (terminate → taskkill/kill)."""
     if not process:
         return
-    
     try:
         process.terminate()
         try:
@@ -35,24 +35,26 @@ def safe_kill_process(process, timeout=3):
             if sys.platform == "win32":
                 try:
                     subprocess.run(
-                        ['taskkill', '/F', '/T', '/PID', str(process.pid)],
-                        capture_output=True,
-                        timeout=timeout
-                    )
-                except:
+                        ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                        capture_output=True, timeout=timeout)
+                except Exception:
                     process.kill()
             else:
                 process.kill()
                 try:
                     process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
-                    logger.warning(f"Не удалось завершить процесс {process.pid}")
+                    logger.warning("Не удалось завершить процесс %s", process.pid)
     except Exception as e:
-        logger.error(f"Ошибка при завершении процесса: {e}")
+        logger.error("Ошибка при завершении процесса: %s", e)
 
-def decode_process_output(data):
-    """Декодирование вывода консольных утилит Windows (ping/netstat пишут в OEM-кодировке,
-    а не в ANSI - наивный text=True ломает кириллицу и парсинг цифр не спасает regex'ы со словами)"""
+
+def decode_process_output(data: Any) -> str:
+    """Декодирование вывода консольных утилит Windows.
+
+    ping/netstat пишут в OEM-кодировке, а не в ANSI — наивный text=True
+    ломает кириллицу. Порядок: utf-8 → cp866 (win32) → latin-1.
+    """
     if isinstance(data, str):
         return data
     try:
@@ -72,9 +74,9 @@ _MS_RE = re.compile(r"[=<]\s*(\d+(?:[.,]\d+)?)\s*(?:мс|ms)", re.IGNORECASE)
 _IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
 
 
-def parse_ping_output(output):
-    """Парсинг вывода ping: ищем число перед мс/ms. Нет числа -> потеря."""
-    match = _MS_RE.search(output)
+def parse_ping_output(output: str) -> Tuple[float, bool]:
+    """Парсинг вывода ping: (миллисекунды, потеряна?). Нет числа -> потеря."""
+    match = _MS_RE.search(output or "")
     if match:
         try:
             return float(match.group(1).replace(",", ".")), False
@@ -83,9 +85,11 @@ def parse_ping_output(output):
     return 0.0, True
 
 
-def parse_trace_output(output, target=None):
-    """Парсинг хопа трассировки: первый IP, отличный от цели (заголовок содержит цель)."""
-    candidates = _IP_RE.findall(output)
+def parse_trace_output(
+    output: str, target: Optional[str] = None
+) -> Tuple[str, float]:
+    """Парсинг хопа трассировки: первый IP, отличный от цели."""
+    candidates = _IP_RE.findall(output or "")
     ip = "*"
     for cand in candidates:
         if cand != target:
@@ -93,11 +97,11 @@ def parse_trace_output(output, target=None):
             break
     else:
         if candidates:
-            # Встретили только саму цель - маршрут достиг конца
+            # Встретили только саму цель — маршрут достиг конца.
             ip = candidates[-1]
 
     ms = 0.0
-    match = _MS_RE.search(output)
+    match = _MS_RE.search(output or "")
     if match:
         try:
             ms = float(match.group(1).replace(",", "."))
@@ -105,16 +109,17 @@ def parse_trace_output(output, target=None):
             ms = 0.0
     return ip, ms
 
-def emergency_cleanup(app=None):
-    """Аварийное сохранение данных"""
+
+def emergency_cleanup(app: Any = None) -> None:
+    """Аварийное сохранение данных."""
     try:
         logger.warning("Выполняется аварийное сохранение данных...")
         if app:
-            if hasattr(app, 'sniffer'):
+            if hasattr(app, "sniffer"):
                 app.sniffer._save_traffic_to_db()
-            if hasattr(app, 'pinger'):
+            if hasattr(app, "pinger"):
                 app.pinger._flush_saves()
-            if hasattr(app, 'ai_orchestrator'):
+            if hasattr(app, "ai_orchestrator"):
                 app.ai_orchestrator.stop()
     except Exception as e:
-        logger.error(f"Ошибка аварийного сохранения: {e}")
+        logger.error("Ошибка аварийного сохранения: %s", e)
