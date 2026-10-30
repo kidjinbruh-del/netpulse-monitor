@@ -59,12 +59,8 @@ def decode_process_output(data):
         return data.decode("utf-8")
     except UnicodeDecodeError:
         pass
-    if sys.platform == "win32":
-        try:
-            return data.decode("cp866", "replace")
-        except Exception:
-            pass
-    return data.decode("latin-1", "replace")
+    # Captured Windows OEM output must also decode when analysed on Linux.
+    return data.decode("cp866", "replace")
 
 
 # Время в ответе ping: время=25мс / time<1ms / время = 25 мс (языконезависимо)

@@ -118,3 +118,11 @@ def test_doctor_hides_secrets_and_rejects_unsafe_config(tmp_path):
     assert 'do-not-output' not in str(result)
     assert not next(x for x in result if x['name']=='port')['ok']
     assert not next(x for x in result if x['name']=='access')['ok']
+
+@pytest.mark.parametrize('platform', ['win32','linux'])
+def test_captured_windows_ping_decodes_on_any_host(monkeypatch, platform):
+    from types import SimpleNamespace
+    from core import utils
+    monkeypatch.setattr(utils,'sys',SimpleNamespace(platform=platform))
+    raw='Ответ от 8.8.8.8: число байт=32 время=25мс TTL=107'.encode('cp866')
+    assert utils.parse_ping_output(utils.decode_process_output(raw)) == (25.0, False)
