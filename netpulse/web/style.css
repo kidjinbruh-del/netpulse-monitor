@@ -298,3 +298,7 @@ button, .btn { min-height: 36px; }
 .stat-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media(max-width:1250px) { .stat-grid.four { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:480px) { .stat-grid.four { grid-template-columns:1fr; } .sys-pill,.quality-pill,.clock { display:none; } }
+.inp { min-width:0; }
+#jr-text { width:100%; }
+.journal-entry-fields { flex-wrap:wrap; }
+@media(max-width:480px) { .journal-entry-fields #jr-user { flex-basis:100% !important; } .journal-entry-fields .btn { flex:1; } }
