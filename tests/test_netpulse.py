@@ -400,9 +400,9 @@ def test_server_endpoints_and_auth():
         state = json.loads(body)
         assert abs(state["down_kbps"] - 12.3) < 0.01
 
-        # с токеном в query (для SSE/EventSource) - тоже ок
+        # Query tokens must not authenticate (URLs leak to logs/history).
         code, _ = _get(base + f"/api/state?token=secret123")
-        assert code == 200
+        assert code == 401
 
         # metrics без auth запрещён
         code, _ = _get(base + "/metrics")

@@ -244,7 +244,7 @@ nav { padding: 4px 10px; flex: 1; overflow-y: auto; }
 .form-grid label { font-size: 12.5px; color: var(--muted); }
 @media (max-width: 700px) { .form-grid { grid-template-columns: 1fr; } }
 
-.switch-row { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; }
+.switch-row { position:relative; display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; }
 .switch-row input[type=checkbox] { display: none; }
 .slider { width: 36px; height: 20px; border-radius: 12px; background: var(--panel2);
           border: 1px solid var(--border); position: relative; transition: background .2s; flex-shrink: 0;
@@ -275,3 +275,26 @@ nav { padding: 4px 10px; flex: 1; overflow-y: auto; }
   .burger { display: flex; }
   .main { padding: 14px 14px 40px; }
 }
+
+/* Accessibility and narrow-window operations */
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+button, .btn { min-height: 36px; }
+.switch-row input[type=checkbox] { display: block; position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events:none; }
+.switch-row:focus-within .slider { outline: 3px solid var(--accent); outline-offset: 3px; }
+.toast { overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  #toast-wrap { left: 12px; right: 12px; max-width: none; bottom: 12px; }
+  .card, .panel, .main { min-width: 0; }
+  .sidebar.open { z-index: 80; box-shadow: 10px 0 40px #0006; }
+  .form-grid input, .form-grid select { max-width: 100%; min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+.connection-state { font-size: 11px; color: var(--muted); padding: 6px 10px; border: 1px solid var(--border); border-radius: 99px; }
+.connection-state[data-state=online] { color: var(--success, #22d3a7); }
+.connection-state[data-state=offline] { color: var(--danger); }
+@media (max-width:700px) { .connection-state { display:none; } }
+.stat-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media(max-width:1250px) { .stat-grid.four { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:480px) { .stat-grid.four { grid-template-columns:1fr; } .sys-pill,.quality-pill,.clock { display:none; } }

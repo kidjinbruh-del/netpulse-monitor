@@ -49,10 +49,7 @@ def test_mesh_auth_verify_matrix():
 def test_mesh_auth_cross_compat_with_hub():
     """Подпись hub (netpulse/mesh.py) валидна для P2P_Core verify."""
     from netpulse.p2p_core.networking.mesh_auth import verify_sig
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("meshmod", r"C:\сеть пупок\netpulse\mesh.py")
-    meshmod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(meshmod)
+    from netpulse import mesh as meshmod
 
     SHARED = "mesh-shared-secret-2026"
     sig = meshmod._sign_hello("NetPulseHub", "sess-hub", SHARED)
@@ -94,6 +91,9 @@ def test_config_default_has_security_keys():
 # ---------- DPAPI ----------
 
 def test_dpapi_encrypt_decrypt_roundtrip():
+    if sys.platform != "win32":
+        import pytest
+        pytest.skip("Windows DPAPI platform check")
     from core.secrets import encrypt_config, decrypt_config
     secret = {"token": "sk-123456"}
     enc = encrypt_config(secret)
@@ -107,17 +107,22 @@ def test_dpapi_encrypt_decrypt_roundtrip():
 
 def test_dpapi_in_config_json_roundtrip():
     """Токен в настоящем config.json зашифрован dpapi и расшифровывается."""
-    p = r"C:\сеть пупок\config.json"
-    if not os.path.exists(p):
-        return  # не критично для CI
-    with open(p, encoding="utf-8") as f:
-        raw = f.read()
-    assert "\ufeff" not in raw, "config.json не должен содержать BOM"
-    cfg = json.loads(raw)
+    from netpulse.config import save_config
     from core.secrets import decrypt_config
-    dec = decrypt_config(cfg)
-    assert isinstance(dec.get("web_token"), str) and len(dec["web_token"]) >= 16, \
-        "web_token должен расшифровываться в нормальный токен"
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            os.chdir(tmp)
+            cfg = load_config()
+            cfg['web_token'] = 'roundtrip-test-token-123'
+            save_config(cfg)
+            with open('config.json', encoding='utf-8') as f:
+                raw = f.read()
+            assert '\ufeff' not in raw
+            stored = json.loads(raw)
+            assert decrypt_config(stored)['web_token'] == cfg['web_token']
+        finally:
+            os.chdir(cwd)
 
 
 # ---------- HTTP-интеграция ----------

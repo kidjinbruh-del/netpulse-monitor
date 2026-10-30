@@ -1,0 +1,9 @@
+[project]
+name = "netpulse-monitor"
+version = "2.3.4"
+requires-python = ">=3.12"
+description = "Local network monitoring and IT operations dashboard"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

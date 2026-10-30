@@ -1,8 +1,8 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-2.2.0-blue)
+![Version](https://img.shields.io/badge/version-2.3.4-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
-![Tests](https://img.shields.io/badge/tests-28%2F28-success)
+![Tests](https://img.shields.io/badge/tests-107%2F107-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
@@ -313,3 +313,10 @@ MIT — см. [LICENSE](LICENSE).
 (`netpulse/p2p_core/`) разрабатывается совместно с
 [olegs32/P2P_Core](https://github.com/olegs32/P2P_Core) — см.
 [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
+## Модернизация 2.3.4
+
+Проверка окружения без запуска мониторинга: `python -m netpulse --check`.
+Полный набор регрессионных тестов: `python -m pytest -q` (зависимости: `requirements-dev.txt`).
+Исправлены конкурентные запросы, HTTP-границы, viewer-вход, IPv6, закрытие SQLite и приватность офлайн-кэша. Добавлены таймауты, индикация устаревших данных и ограничения очереди заданий.
+Подробности, проверки и ограничения: [docs/modernization-2.3.4.md](docs/modernization-2.3.4.md).

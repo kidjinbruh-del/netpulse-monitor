@@ -4,6 +4,8 @@ REST + SSE-стрим живого состояния + Prometheus /metrics + au
 + фоновые задачи (сканы, MTR, LAN) + управление Windows Firewall + автобэкапы.
 """
 
+import ipaddress
+import ssl
 import hmac
 import json
 import logging
@@ -37,6 +39,8 @@ import logging
 logger = logging.getLogger(__name__)
 WORKERS = ThreadPoolExecutor(max_workers=6, thread_name_prefix="np-worker")
 JOBS = {}
+JOBS_LOCK = threading.RLock()
+JOB_SLOTS = threading.BoundedSemaphore(64)
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -66,20 +70,10 @@ PUBLIC_ENDPOINTS = {"whoami", "meta", "login"}
 def _ip_in_network(ip, network):
     """Проверка вхождения IP в network вида '192.168.1.0/24' или '10.0.0.1'."""
     try:
-        if "/" in network:
-            ns, prefix = network.split("/", 1)
-            prefix = int(prefix)
-        else:
-            ns, prefix = network, 32
-        h = int(ip.split(".")[0]) << 24 | int(ip.split(".")[1]) << 16 \
-            | int(ip.split(".")[2]) << 8 | int(ip.split(".")[3])
-        base = int(ns.split(".")[0]) << 24 | int(ns.split(".")[1]) << 16 \
-            | int(ns.split(".")[2]) << 8 | int(ns.split(".")[3])
-        mask = ((1 << prefix) - 1) << (32 - prefix) if 0 < prefix < 32 else (
-            0 if prefix == 0 else 0xFFFFFFFF)
-        return (h & mask) == (base & mask)
-    except Exception:
+        return ipaddress.ip_address(ip) in ipaddress.ip_network(network, strict=False)
+    except (ValueError, TypeError):
         return False
+
 
 
 def _allowlist_denied(ip, cfg):
@@ -101,7 +95,7 @@ def _auth_fail(ip, path="", method=""):
         cnt, t0 = 0, now
     cnt += 1
     AUTH_FAILS[ip] = [cnt, t0]
-    logger.warning(f"[AUTH] fail #{cnt}/{AUTH_MAX_FAILS} ip={ip} {method} {path}")
+    logger.warning(f"[AUTH] fail #{cnt}/{AUTH_MAX_FAILS} ip={ip} {method} {urlparse(path).path}")
     if cnt >= AUTH_MAX_FAILS:
         AUTH_BLOCK[ip] = now + AUTH_BLOCK_SEC
         AUTH_FAILS.pop(ip, None)
@@ -197,29 +191,59 @@ def platform_report_text(svc, days=30):
     return "\n".join(lines)
 
 
+class JobCapacityError(RuntimeError):
+    pass
+
+
 def submit_job(fn):
+    if not JOB_SLOTS.acquire(blocking=False):
+        raise JobCapacityError("Очередь занята; повторите запрос позже")
     job_id = uuid.uuid4().hex[:12]
-    JOBS[job_id] = {"status": "running", "result": None, "error": None,
-                    "started": time.time()}
+    job = {"status": "running", "result": None, "error": None, "started": time.time()}
+    with JOBS_LOCK:
+        prune_jobs()
+        JOBS[job_id] = job
 
     def wrap():
         try:
-            JOBS[job_id]["result"] = fn()
-            JOBS[job_id]["status"] = "done"
-        except Exception as e:
-            JOBS[job_id]["status"] = "error"
-            JOBS[job_id]["error"] = str(e)
-
-    WORKERS.submit(wrap)
+            result = fn()
+            with JOBS_LOCK:
+                job.update(result=result, status="done", finished=time.time())
+        except Exception as error:
+            with JOBS_LOCK:
+                job.update(status="error", error=str(error), finished=time.time())
+        finally:
+            JOB_SLOTS.release()
+    try:
+        WORKERS.submit(wrap)
+    except Exception:
+        with JOBS_LOCK:
+            JOBS.pop(job_id, None)
+        JOB_SLOTS.release()
+        raise
     return job_id
 
 
 def prune_jobs(max_age=1800):
     cutoff = time.time() - max_age
-    for jid in list(JOBS.keys()):
-        j = JOBS[jid]
-        if j["status"] != "running" and j["started"] < cutoff:
-            del JOBS[jid]
+    with JOBS_LOCK:
+        for jid, job in list(JOBS.items()):
+            if job["status"] != "running" and job.get("finished", job["started"]) < cutoff:
+                del JOBS[jid]
+        completed = sorted(((jid, job) for jid, job in JOBS.items() if job['status'] != 'running'),
+                           key=lambda item: item[1].get('finished', item[1]['started']))
+        for jid, _ in completed[:max(0, len(JOBS) - 1024)]:
+            JOBS.pop(jid, None)
+
+
+def redact_audit(value):
+    if isinstance(value, dict):
+        return {key: ('***' if any(word in key.lower() for word in
+                ('token', 'password', 'secret', 'community', 'api_key')) else redact_audit(item))
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_audit(item) for item in value]
+    return value
 
 
 # ================= Firewall (NetLimiter/Portmaster идея) =================
@@ -419,12 +443,37 @@ class BackupManager:
 
 class Api:
     def __init__(self, service: MonitorService, config, backup: BackupManager):
+        self._request_state = threading.local()
         self.svc = service
         self.cfg = config
         self.backup = backup
         self.tracer = Tracer()
         self.p2p_metrics_hist = {}   # node_id -> deque([(ts, cpu, mem_pct)])
         self.p2p_metrics_lock = threading.Lock()
+
+    @property
+    def _cached_body(self):
+        return getattr(self._request_state, 'body', None)
+
+    @_cached_body.setter
+    def _cached_body(self, value):
+        self._request_state.body = value
+
+    @property
+    def _cached_actor(self):
+        return getattr(self._request_state, 'actor', None)
+
+    @_cached_actor.setter
+    def _cached_actor(self, value):
+        self._request_state.actor = value
+
+    @property
+    def _cached_role(self):
+        return getattr(self._request_state, 'role', None)
+
+    @_cached_role.setter
+    def _cached_role(self, value):
+        self._request_state.role = value
 
     # ----- P2P mesh (мост в решётку) -----
 
@@ -1743,7 +1792,8 @@ class Handler(BaseHTTPRequestHandler):
     def _own_origin(self):
         host = self.headers.get("Host") or ""
         if host:
-            return f"http://{host}".rstrip("/")
+            scheme = "https" if isinstance(self.connection, ssl.SSLSocket) else "http"
+            return f"{scheme}://{host}".rstrip("/")
         return None
 
     def _origin_allowed(self):
@@ -1857,6 +1907,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed(qs):
                 name = path[len("/api/"):] if path.startswith("/api/") else ""
                 if name not in PUBLIC_ENDPOINTS:
+                    if self.headers.get('X-Auth'):
+                        _auth_fail(ip, path, 'GET')
                     # GET без токена: 401 + alert, НО без накопления блока —
                     # SPA до входа легитимно делает пачку polling-запросов,
                     # иначе собственный фронт блокирует loopback (self-DoS).
@@ -2072,6 +2124,8 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- POST ----------
 
     def do_POST(self):
+        # Always close after POST: rejected/partial bodies cannot become another request.
+        self.close_connection = True
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         qs = parse_qs(parsed.query)
@@ -2124,14 +2178,41 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         name = path[len("/api/"):]
-        length = int(self.headers.get("Content-Length") or 0)
+        if self.headers.get('Transfer-Encoding'):
+            self._send_json({'error': 'transfer encoding not supported'}, 400)
+            return
+        lengths = self.headers.get_all('Content-Length', [])
+        try:
+            if len(lengths) > 1:
+                raise ValueError('duplicate length')
+            length = int(lengths[0]) if lengths else 0
+            if length < 0:
+                raise ValueError('negative length')
+        except ValueError:
+            self._send_json({'error': 'invalid Content-Length'}, 400)
+            return
+        if length > 1024 * 1024:
+            self._send_json({'error': 'request exceeds 1 MiB'}, 413)
+            return
         body = {}
         if length:
+            old_timeout = self.connection.gettimeout()
             try:
+                self.connection.settimeout(10)
                 raw = self.rfile.read(length)
-                body = json.loads(raw.decode("utf-8")) if raw else {}
-            except Exception:
-                body = {}
+                if len(raw) != length:
+                    raise ValueError('incomplete body')
+                body = json.loads(raw.decode('utf-8'))
+                if not isinstance(body, dict):
+                    raise ValueError('JSON object required')
+            except (ValueError, UnicodeError):
+                self._send_json({'error': 'valid JSON object required'}, 400)
+                return
+            except (TimeoutError, OSError):
+                self._send_json({'error': 'request body timeout'}, 408)
+                return
+            finally:
+                self.connection.settimeout(old_timeout)
 
         if is_login:
             # вход: бессрочная сессия админа (cookie на 10 лет)
@@ -2144,6 +2225,9 @@ class Handler(BaseHTTPRequestHandler):
                                        str(a["token"])))
             if cfg.get("web_token"):
                 candidates.append(("admin", str(cfg["web_token"])))
+            for user in (cfg.get('web_users') or []):
+                if isinstance(user, dict) and user.get('token'):
+                    candidates.append((str(user.get('name') or '?'), str(user['token'])))
             for nm, tok in candidates:
                 if token and hmac.compare_digest(token.encode("utf-8"),
                                                  tok.encode("utf-8")):
@@ -2153,7 +2237,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(
                         "Set-Cookie",
                         f"np_session={token}; HttpOnly; SameSite=Strict; "
-                        f"Max-Age=315360000; Path=/")
+                        f"Max-Age=315360000; Path=/" +
+                        ("; Secure" if isinstance(self.connection, ssl.SSLSocket) else ""))
                     self._sec()
                     payload = json.dumps({"ok": True, "user": nm},
                                          ensure_ascii=False).encode("utf-8")
@@ -2203,6 +2288,8 @@ class Handler(BaseHTTPRequestHandler):
                 status_code, payload = 200, result
         except BrokenPipeError:
             return
+        except JobCapacityError as e:
+            status_code, payload = 503, {"error": str(e)}
         except (ValueError, TypeError, KeyError, IndexError) as e:
             # невалидный ввод от клиента — внятный 400, а не 500
             status_code, payload = 400, {"error": f"неверный запрос: {e}"}
@@ -2218,10 +2305,7 @@ class Handler(BaseHTTPRequestHandler):
                     action TEXT NOT NULL,
                     status INTEGER,
                     details TEXT)""")
-            details = json.dumps(body, ensure_ascii=False)[:400]
-            for secret in ("token", "web_token"):
-                details = re.sub(
-                    rf'"{secret}"\s*:\s*"[^"]*"', f'"{secret}": "***"', details)
+            details = json.dumps(redact_audit(body), ensure_ascii=False)[:400]
             self.api.svc.db.execute(
                 """INSERT INTO audit_log
                    (timestamp, user, ip, action, status, details)
@@ -2248,8 +2332,8 @@ def build_server(service: MonitorService, config, backup: BackupManager,
     api.mesh = mesh
     if mesh:
         mesh.start()
-    Handler.api = api
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    bound_handler = type("BoundHandler", (Handler,), {"api": api})
+    httpd = ThreadingHTTPServer((host, port), bound_handler)
     httpd.daemon_threads = True
     return httpd
 

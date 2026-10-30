@@ -78,7 +78,7 @@
 
   <main class="main">
     <header class="topbar">
-      <button class="burger" onclick="document.getElementById('sidebar').classList.toggle('open')"><span></span><span></span><span></span></button>
+      <button class="burger" aria-label="Открыть меню" onclick="document.getElementById('sidebar').classList.toggle('open')"><span></span><span></span><span></span></button>
       <h1 id="view-title">Дашборд</h1>
       <div class="topbar-right">
         <div class="pill sys-pill" id="sys-pill" title="Процессор и память этой машины">
@@ -86,7 +86,7 @@
         </div>
         <div class="pill" id="mode-pill" title="Режим трафика: Live=scapy, Net=psutil"><span class="dot"></span><b>…</b></div>
         <div class="pill quality-pill" id="quality-pill"><span class="dot"></span><span id="quality-text">—</span></div>
-        <div class="pill clock" id="clock">--:--:--</div>
+        <span id="connection-state" class="connection-state" role="status">Подключение…</span><div class="pill clock" id="clock">--:--:--</div>
         <button class="icon-btn" title="Отчёт TXT" onclick="window.open('/report.txt')"><svg class="ic"><use href="#i-doc"/></svg></button>
       </div>
     </header>

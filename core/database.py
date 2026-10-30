@@ -25,6 +25,8 @@ class DatabaseManager:
     ALLOWED_TABLES = {'traffic', 'pings', 'traces', 'alerts', 'security_log', 'ai_predictions'}
     
     def __init__(self, db_path=DB_PATH, pool_size=3):
+        if pool_size < 1:
+            raise ValueError("pool_size must be positive")
         self.db_path = db_path
         self._pool = queue.Queue(maxsize=pool_size)
         self._lock = threading.RLock()
@@ -85,19 +87,21 @@ class DatabaseManager:
             raise
             
         finally:
-            if conn and not self._closed:
+            if conn is not None:
                 try:
                     conn.rollback()
-                    if self._pool.qsize() < self._pool.maxsize:
-                        self._pool.put_nowait(conn)
-                    else:
-                        conn.close()
-                except:
-                    try:
-                        conn.close()
-                    except:
-                        pass
-    
+                    # Serialize with close(): never return a borrowed connection to a closed pool.
+                    with self._lock:
+                        if self._closed:
+                            conn.close()
+                        else:
+                            try:
+                                self._pool.put_nowait(conn)
+                            except queue.Full:
+                                conn.close()
+                except sqlite3.Error:
+                    conn.close()
+
     def init_db(self):
         """Инициализация БД"""
         try:
@@ -379,17 +383,19 @@ class DatabaseManager:
         }
     
     def close(self):
-        if self._closed:
-            return
-        self._closed = True
-        while not self._pool.empty():
-            try:
-                conn = self._pool.get_nowait()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            while True:
                 try:
-                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                except Exception:
+                    conn = self._pool.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                except sqlite3.Error:
                     pass
-                conn.close()
-            except Exception:
-                pass
+                finally:
+                    conn.close()
         logger.info("DatabaseManager закрыт")

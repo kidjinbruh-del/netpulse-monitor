@@ -1,5 +1,5 @@
 # Core dependencies - compatible with Python 3.12+
-python>=3.12
+# Python >=3.12 is required (interpreter, not a PyPI package)
 
 # Web-сервер NetPulse (hub)
 psutil>=5.9.0

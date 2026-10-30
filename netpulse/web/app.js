@@ -4,6 +4,7 @@
 window.__npErrors = [];
 window.addEventListener("error", (e) => {
   try {
+    if (window.__npErrors.length >= 100) window.__npErrors.shift();
     window.__npErrors.push(String(e.message || e) + " @" + (e.filename || "").split("/").pop() +
       ":" + (e.lineno || "?"));
     let d = document.getElementById("np-err-dump");
@@ -20,20 +21,37 @@ window.addEventListener("error", (e) => {
 
 const $ = (id) => document.getElementById(id);
 
-const Auth = {
-  get() { return localStorage.getItem("np-token") || ""; },
-  set(t) { localStorage.setItem("np-token", t); },
-  suffix(path) { const t = this.get(); if (!t) return ""; return ((path || "").includes("?") ? "&" : "?") + "token=" + encodeURIComponent(t); },
+const Storage = {
+  memory: new Map(),
+  getItem(key) { try { return localStorage.getItem(key) ?? this.memory.get(key) ?? null; } catch (_) { return this.memory.get(key) ?? null; } },
+  setItem(key, value) { this.memory.set(key, value); try { localStorage.setItem(key, value); } catch (_) {} },
 };
 
+const Auth = {
+  get() { return Storage.getItem("np-token") || ""; },
+  set(t) { Storage.setItem("np-token", t); },
+  suffix() { return ""; }, // Credentials belong in headers/cookies, never in URLs.
+};
+
+async function timedFetch(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Сервер не ответил за 15 секунд');
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+
 async function apiGet(path) {
-  const r = await fetch("/api/" + path + Auth.suffix(path), { headers: { "X-Auth": Auth.get() } });
+  const r = await timedFetch("/api/" + path + Auth.suffix(path), { headers: { "X-Auth": Auth.get() } });
   if (r.status === 401) throw new UnauthorizedError();
   if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
   return r.json();
 }
 async function apiPost(path, body = {}) {
-  const r = await fetch("/api/" + path + Auth.suffix(path), {
+  const r = await timedFetch("/api/" + path + Auth.suffix(path), {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Auth": Auth.get() },
     body: JSON.stringify(body),
@@ -240,9 +258,9 @@ const UI = {
     $("theme-toggle").addEventListener("change", e => {
       const dark = e.target.checked;
       document.documentElement.dataset.theme = dark ? "dark" : "light";
-      localStorage.setItem("np-theme", dark ? "dark" : "light");
+      Storage.setItem("np-theme", dark ? "dark" : "light");
     });
-    const savedTheme = localStorage.getItem("np-theme") || "dark";
+    const savedTheme = Storage.getItem("np-theme") || "dark";
     document.documentElement.dataset.theme = savedTheme;
     $("theme-toggle").checked = savedTheme === "dark";
 
@@ -258,6 +276,15 @@ const UI = {
     setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("ru-RU"); }, 1000);
 
     this.startStream();
+    setInterval(() => {
+      const indicator = $('connection-state');
+      if (indicator && (!this.lastStateAt || Date.now() - this.lastStateAt > 10000)) {
+        indicator.textContent = 'Данные устарели · переподключение'; indicator.dataset.state = 'offline';
+      }
+    }, 3000);
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') $('sidebar').classList.remove('open');
+    });
 
     setInterval(() => {
       const v = this.currentView;
@@ -269,8 +296,7 @@ const UI = {
       if (v === "diag" && MtrActive) this.mtrPoll(true);
     }, 4000);
 
-    if ("Notification" in window && Notification.permission === "default")
-      setTimeout(() => Notification.requestPermission().catch(() => {}), 5000);
+    // Notification permission is requested only by an explicit user action.
   },
 
   hashView() {
@@ -305,6 +331,7 @@ const UI = {
   },
 
   /* ---------- живой поток состояния ---------- */
+  lastStreamAt: 0,
   startStream() {
     try {
       const es = new EventSource("/api/stream" + Auth.suffix());
@@ -312,6 +339,7 @@ const UI = {
         if (!e.data || e.data === "ping") return;
         try {
           const snap = JSON.parse(e.data);
+          this.lastStreamAt = Date.now();
           this.renderState(snap);
           $("login-overlay").classList.add("hidden");
         } catch (err) {}
@@ -331,6 +359,7 @@ const UI = {
     if (this.fallbackStarted) return;
     this.fallbackStarted = true;
     const loop = async () => {
+      if (Date.now() - this.lastStreamAt < 5000) { setTimeout(loop, 1500); return; }
       try {
         const snap = await apiGet("state");
         this.renderState(snap);
@@ -354,7 +383,8 @@ const UI = {
       $("login-error").textContent = "";
       location.reload();
     } catch (e) {
-      $("login-error").textContent = "Неверный токен";
+      Auth.set("");
+      $("login-error").textContent = e instanceof UnauthorizedError ? "Неверный токен" : e.message;
     }
   },
   async loadWhoami() {
@@ -367,6 +397,9 @@ const UI = {
 
   /* ---------- рендер состояния ---------- */
   renderState(snap) {
+    const indicator = $('connection-state');
+    if (indicator) { indicator.textContent = 'Связь активна'; indicator.dataset.state = 'online'; }
+    this.lastStateAt = Date.now();
     $("st-down").innerHTML = `${fmtNum(snap.down_kbps)}<span class="unit"> KB/s</span>`;
     $("st-up").innerHTML = `${fmtNum(snap.up_kbps)}<span class="unit"> KB/s</span>`;
 
