@@ -11,26 +11,26 @@ ROOT = Path(__file__).resolve().parents[1] / 'deploy'
 
 def test_provisioning_has_consistent_datasource_and_dashboard():
     base = ROOT / 'observability'
-    compose = yaml.safe_load((base/'compose.yml').read_text())
+    compose = yaml.safe_load((base/'compose.yml').read_text(encoding='utf-8'))
     assert set(compose['services']) == {'prometheus', 'grafana'}
     for service in compose['services'].values():
         assert all(port.startswith('127.0.0.1:') for port in service['ports'])
-    dashboard = json.loads((base/'grafana/dashboards/netpulse.json').read_text())
+    dashboard = json.loads((base/'grafana/dashboards/netpulse.json').read_text(encoding='utf-8'))
     assert dashboard['panels']
-    datasource = yaml.safe_load((base/'grafana/provisioning/datasources/prometheus.yml').read_text())['datasources'][0]
+    datasource = yaml.safe_load((base/'grafana/provisioning/datasources/prometheus.yml').read_text(encoding='utf-8'))['datasources'][0]
     assert datasource['uid'] == 'netpulse-prometheus'
     for panel in dashboard['panels']:
         assert panel['datasource']['uid'] == datasource['uid']
-    prometheus = yaml.safe_load((base/'prometheus/prometheus.yml').read_text())
+    prometheus = yaml.safe_load((base/'prometheus/prometheus.yml').read_text(encoding='utf-8'))
     scrape = prometheus['scrape_configs'][0]
     assert scrape['authorization']['credentials_file'] == '/run/secrets/netpulse_metrics_token'
     assert not scrape.get('tls_config', {}).get('insecure_skip_verify')
-    rules = yaml.safe_load((base/'prometheus/alerts.yml').read_text())['groups'][0]['rules']
+    rules = yaml.safe_load((base/'prometheus/alerts.yml').read_text(encoding='utf-8'))['groups'][0]['rules']
     assert len(rules) == 5
     assert 'poll_interval_seconds' in next(rule['expr'] for rule in rules if rule['alert']=='MikroTikCollectorStale')
 
 def test_zabbix_template_uses_verified_tls_and_no_embedded_token():
-    template = yaml.safe_load((ROOT/'zabbix/netpulse-7.0.yaml').read_text())['zabbix_export']['templates'][0]
+    template = yaml.safe_load((ROOT/'zabbix/netpulse-7.0.yaml').read_text(encoding='utf-8'))['zabbix_export']['templates'][0]
     master = next(item for item in template['items'] if item['type'] == 'HTTP_AGENT')
     assert master['verify_peer'] == 'YES' and master['verify_host'] == 'YES'
     assert master['headers'][0]['value'] == 'Bearer {$NETPULSE.TOKEN}'
