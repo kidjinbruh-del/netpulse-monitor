@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+rule_files: [/etc/prometheus/alerts.yml]
+scrape_configs:
+  - job_name: netpulse
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets: ['host.docker.internal:8770']
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/netpulse_metrics_token

@@ -42,6 +42,7 @@ from .l2map import L2Map
 from .geo import country as geo_country, top_countries, flag as geo_flag
 from .cve import CVEChecker
 from .proxmox import ProxmoxClient
+from .mikrotik import MikroTikMonitor
 import logging
 
 logger = logging.getLogger(__name__)
@@ -826,6 +827,7 @@ class MonitorService:
         self.l2map = L2Map(self)
         self.cve = CVEChecker(self)
         self.proxmox = ProxmoxClient(self)
+        self.mikrotik = MikroTikMonitor(self)
 
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
@@ -951,6 +953,10 @@ class MonitorService:
                                  name="np-proxmox")
             t.start()
             self._threads.append(t)
+
+        router_thread = threading.Thread(target=self.mikrotik.loop, daemon=True, name="np-mikrotik")
+        router_thread.start()
+        self._threads.append(router_thread)
 
         admin = _is_admin()
         with self._lock:

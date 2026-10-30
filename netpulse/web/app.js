@@ -325,7 +325,7 @@ const UI = {
     if (view === "settings") this.loadSettings();
     if (view === "journal") this.loadJournal();
     if (view === "park") this.loadPark();
-    if (view === "infra") { this.loadInfra(); this.loadCustomChecks(); }
+    if (view === "infra") { this.loadInfra(); this.loadCustomChecks(); this.loadRouters(); }
     if (view === "mesh") this.loadMesh();
     if (view === "sysadmin") this.loadSysadmin();
   },
@@ -1479,6 +1479,38 @@ const UI = {
     } catch (e) { toast(String(e), true); }
     btn.disabled = false;
   },
+  async loadRouters() {
+    try {
+      const result = await apiGet('mikrotik');
+      $('router-poll').disabled = !result.enabled || !result.devices.length;
+      $('router-status').textContent = result.error || (!result.enabled ? 'MikroTik отключён. Откройте инструкцию подключения ниже.' :
+        `Роутеров: ${result.devices.length}. Последняя проверка: ${result.checked_at ? new Date(result.checked_at*1000).toLocaleString('ru-RU') : 'ещё не выполнялась'}`);
+      $('router-devices').innerHTML = result.devices.map(router => {
+        const data = router.data || {};
+        const interfaces = data.interfaces || [];
+        return `<article class="result-box"><b>${esc(router.name)}</b> · ${esc(router.transport)} · <span class="${router.ok ? 'ok' : 'warn'}">${router.ok ? 'Связь есть' : 'Нет данных'}</span>` +
+          `<p>${router.error ? esc(router.error) : `RouterOS ${esc(data.version)} · ${esc(data.board)} · CPU ${data.cpu_percent ?? '—'}%`}</p>` +
+          (router.ok ? `<p class="muted">Интерфейсов: ${interfaces.length}. Активных: ${interfaces.filter(i=>i.running && !i.disabled).length}</p>` +
+            `<details><summary>Интерфейсы</summary><div style="overflow:auto"><table class="tbl"><thead><tr><th>Порт</th><th>Состояние</th><th>Получено байт</th><th>Отправлено байт</th></tr></thead><tbody>${interfaces.map(i=>`<tr><td>${esc(i.name)}</td><td>${i.disabled ? 'Выключен' : i.running ? 'Активен' : 'Нет линка'}</td><td>${i.rx_byte ?? '—'}</td><td>${i.tx_byte ?? '—'}</td></tr>`).join('')}</tbody></table></div></details>` : '') + '</article>';
+      }).join('');
+    } catch(error) { $('router-status').textContent = error.message; }
+  },
+  async pollRouters() {
+    const button = $('router-poll'); button.disabled = true;
+    try {
+      const result = await apiPost('mikrotikpoll');
+      $('router-status').textContent = 'Проверка запущена. Данные появятся после ответа устройств.';
+      for (let i=0; i<60; i++) {
+        await new Promise(resolve=>setTimeout(resolve,2000));
+        const job = await apiGet('securityresult?job='+encodeURIComponent(result.job));
+        if (job.status === 'error') throw new Error(job.error || 'Опрос не выполнен');
+        if (job.status === 'done') { await this.loadRouters(); return; }
+      }
+      $('router-status').textContent = 'Опрос продолжается в фоне. Обновите статус позже.';
+    } catch(error) { $('router-status').textContent=error.message; }
+    finally { button.disabled=false; }
+  },
+
   async infraDtype(id, dtype) {
     try {
       await apiPost("infradtype", { host_id: id, dtype });
@@ -1677,9 +1709,10 @@ const UI = {
   },
   async regenToken() {
     try {
-      await apiPost("settings", { _regen_token: true });
+      const result = await apiPost("settings", { _regen_token: true });
+      if (result.new_token) Auth.set(result.new_token);
       await this.loadSettings();
-      toast("Токен обновлён — войдите заново с новым токеном");
+      toast("Токен обновлён. Текущая сессия использует новый токен; для других клиентов возьмите его из локального config.json.");
     } catch (e) { toast(String(e), true); }
   },
   async saveSettings() {

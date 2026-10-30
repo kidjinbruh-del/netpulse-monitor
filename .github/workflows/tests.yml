@@ -22,3 +22,16 @@ jobs:
       - run: node --check netpulse/web/app.js
       - run: node --check netpulse/web/sw.js
       - run: node tests/frontend.cjs
+
+  prometheus-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare validation secret
+        run: mkdir -p deploy/observability/secrets && printf 'ci-placeholder' > deploy/observability/secrets/netpulse_metrics_token.txt
+      - name: Validate Prometheus config and alert rules
+        run: >-
+          docker run --rm --entrypoint /bin/promtool
+          -v "${{ github.workspace }}/deploy/observability/prometheus:/etc/prometheus:ro"
+          -v "${{ github.workspace }}/deploy/observability/secrets:/run/secrets:ro"
+          prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml

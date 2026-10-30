@@ -1,6 +1,6 @@
 [project]
 name = "netpulse-monitor"
-version = "2.3.4"
+version = "2.4.0"
 requires-python = ">=3.12"
 description = "Local network monitoring and IT operations dashboard"
 

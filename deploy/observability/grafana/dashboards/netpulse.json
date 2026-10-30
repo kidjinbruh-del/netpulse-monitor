@@ -1,0 +1,379 @@
+{
+  "uid": "netpulse-mikrotik",
+  "title": "NetPulse / MikroTik",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": [
+    "netpulse",
+    "mikrotik"
+  ],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "router",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "netpulse-prometheus"
+        },
+        "query": "label_values(netpulse_mikrotik_up, router)",
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Доступность MikroTik",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "netpulse_mikrotik_up{router=~\"$router\"}",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Возраст последнего опроса",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "time() - netpulse_mikrotik_last_poll_timestamp_seconds{router=~\"$router\"}",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "CPU роутера",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "netpulse_mikrotik_cpu_percent{router=~\"$router\"}",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Свободная память",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "netpulse_mikrotik_memory_free_bytes{router=~\"$router\"} / netpulse_mikrotik_memory_total_bytes{router=~\"$router\"} * 100",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Входящий трафик интерфейсов",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(netpulse_mikrotik_interface_receive_bytes_total{router=~\"$router\"}[5m]) * 8",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Исходящий трафик интерфейсов",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(netpulse_mikrotik_interface_transmit_bytes_total{router=~\"$router\"}[5m]) * 8",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Активные интерфейсы",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "netpulse_mikrotik_interface_running{router=~\"$router\"}",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Ошибки интерфейсов",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(netpulse_mikrotik_interface_receive_errors_total{router=~\"$router\"}[5m])",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Качество связи NetPulse",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "np_quality_score",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Пинг NetPulse",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "netpulse-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "netpulse_ping_seconds",
+          "legendFormat": "{{router}} {{interface}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

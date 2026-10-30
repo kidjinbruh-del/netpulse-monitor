@@ -33,6 +33,7 @@ from core.utils import decode_process_output
 
 from . import __version__
 from .services import MonitorService
+from .metrics import render_metrics
 from .mesh import MeshClient, MeshError, MeshHub
 import logging
 
@@ -55,7 +56,7 @@ SAFE_TARGET = re.compile(r"^[A-Za-z0-9._\-]{1,253}$")
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 # Ключи конфига, которые нельзя менять через API (только правкой config.json)
-PROTECTED_SETTINGS = {"web_auth_enabled"}
+PROTECTED_SETTINGS = {"web_auth_enabled", "mikrotik", "metrics"}
 
 # ---------- защита от брутфорса токена ----------
 AUTH_FAILS = {}   # ip -> [count, window_start]
@@ -243,6 +244,14 @@ def redact_audit(value):
                 for key, item in value.items()}
     if isinstance(value, list):
         return [redact_audit(item) for item in value]
+    return value
+
+
+def discard_masked(value):
+    if isinstance(value, dict):
+        return {key: discard_masked(item) for key, item in value.items() if item != '***'}
+    if isinstance(value, list):
+        return [discard_masked(item) for item in value]
     return value
 
 
@@ -1061,10 +1070,10 @@ class Api:
     # ----- настройки / бэкапы -----
 
     def settings_get(self, q):
-        cfg = json.loads(json.dumps(self.cfg))
-        token = cfg.get("web_token", "")
-        if token:
-            cfg["web_token_masked"] = token[:6] + "..." + token[-4:]
+        cfg = redact_audit(json.loads(json.dumps(self.cfg)))
+        if (cfg.get('webhook') or {}).get('url'):
+            cfg['webhook']['url'] = '***'
+        cfg['web_token_masked'] = '***' if self.cfg.get('web_token') else ''
         return cfg
 
     def settings_post(self, q):
@@ -1072,10 +1081,18 @@ class Api:
         regen = body.pop("_regen_token", False)
         for key in PROTECTED_SETTINGS:
             body.pop(key, None)
-        if regen:
-            body.setdefault("web_token", uuid.uuid4().hex)
+        rotated_token = uuid.uuid4().hex if regen else None
+        if rotated_token:
+            body["web_token"] = rotated_token
+        # Masked user lists are display-only: never overwrite stored credentials.
+        if "***" in json.dumps(body.get("web_users", [])):
+            body.pop("web_users", None)
+        body = discard_masked(body)
         self.svc.apply_settings(body)
-        return {"ok": True, "config": self.cfg}
+        result = {"ok": True, "config": self.settings_get(q)}
+        if rotated_token:
+            result["new_token"] = rotated_token
+        return result
 
     def backup_run(self, q):
         res = self.backup.run_backup_now()
@@ -1561,6 +1578,16 @@ class Api:
         found = self.svc.cve.check_products(products)
         return {"found": found, "products": len(products)}
 
+    def mikrotik_status(self, q):
+        monitor = getattr(self.svc, 'mikrotik', None)
+        return monitor.status() if monitor else {'enabled': False, 'devices': [], 'error': '', 'checked_at': None}
+
+    def mikrotik_poll(self, q):
+        monitor = getattr(self.svc, 'mikrotik', None)
+        if not monitor:
+            return (503, {'error': 'MikroTik collector unavailable'})
+        return {'job': submit_job(monitor.poll)}
+
     def proxmox_status(self, q):
         return self.svc.proxmox.status()
 
@@ -1690,6 +1717,7 @@ ROUTES_GET = {
     "sla": "sla_ep", "geomap": "geo_ep", "ramforecast": "ram_forecast_ep",
     "l2map": "l2_map_ep", "ptrs": "ptrs_ep",
     "mtrhistory": "mtr_history_ep",
+    "mikrotik": "mikrotik_status",
     "cvestatus": "cve_status", "proxmox": "proxmox_status",
     "reportpdf": "report_pdf",
     "p2pstatus": "p2p_status", "p2pnodes": "p2p_nodes",
@@ -1714,6 +1742,7 @@ ROUTES_POST = {
     "infrascan": "infra_scan", "infradtype": "infra_dtype",
     "idswl": "ids_wl_add", "customchecksrun": "customchecks_run",
     "l2scan": "l2_scan", "cvescan": "cve_scan",
+    "mikrotikpoll": "mikrotik_poll",
     "proxmoxpoll": "proxmox_poll", "mtrfan": "mtr_fan",
     "p2pcall": "p2p_call",
 }
@@ -1766,6 +1795,13 @@ class Handler(BaseHTTPRequestHandler):
                                              tok.encode("utf-8")):
                     return (name, role)
         return None
+
+    def _metrics_authed(self):
+        env_name = (self.api.cfg.get('metrics') or {}).get('token_env', 'NP_METRICS_TOKEN')
+        expected = os.environ.get(env_name, '')
+        supplied = self.headers.get('Authorization', '')
+        return bool(expected and supplied.startswith('Bearer ') and
+                    hmac.compare_digest(supplied[7:].encode(), expected.encode()))
 
     def _authed(self, qs=None):
         ident = self._identity(qs)
@@ -1904,7 +1940,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if (path.startswith("/api/") or path == "/metrics"
                 or path in ("/journal.txt", "/journal.csv", "/report.txt")):
-            if not self._authed(qs):
+            if not self._authed(qs) and not (path == "/metrics" and self._metrics_authed()):
                 name = path[len("/api/"):] if path.startswith("/api/") else ""
                 if name not in PUBLIC_ENDPOINTS:
                     if self.headers.get('X-Auth'):
@@ -2070,54 +2106,12 @@ class Handler(BaseHTTPRequestHandler):
         self._static(path)
 
     def _prometheus(self):
-        s = self.api.svc.get_snapshot()
-        lines = [
-            "# HELP np_down_speed Current download speed KB/s",
-            "# TYPE np_down_speed gauge",
-            f"np_down_speed {s['down_kbps']}",
-            "# HELP np_up_speed Current upload speed KB/s",
-            "# TYPE np_up_speed gauge",
-            f"np_up_speed {s['up_kbps']}",
-            "# HELP np_ping_ms Current ping ms",
-            "# TYPE np_ping_ms gauge",
-            f"np_ping_ms {s['ping']['current'] or 0}",
-            "# HELP np_quality_score Network quality score 0-100",
-            "# TYPE np_quality_score gauge",
-            f"np_quality_score {s['quality']['score']}",
-            "# HELP np_alerts_unread Unacknowledged alerts",
-            "# TYPE np_alerts_unread gauge",
-            f"np_alerts_unread {s['alerts_unread']}",
-            "# HELP np_traffic_total_mb Session totals MB",
-            "# TYPE np_traffic_total_mb counter",
-            f"np_traffic_total_down_mb {s['total_down_mb']}",
-            f"np_traffic_total_up_mb {s['total_up_mb']}",
-        ]
-        try:
-            j24 = self.api.svc.db.execute(
-                """SELECT COUNT(*) AS n FROM journal
-                   WHERE timestamp > datetime('now','localtime','-1 day')""",
-                fetch=True)
-            hosts_n = self.api.svc.db.execute(
-                "SELECT COUNT(*) AS n FROM hosts", fetch=True)
-            lines += [
-                "# HELP np_journal_entries_24h Journal entries last 24h",
-                "# TYPE np_journal_entries_24h gauge",
-                f"np_journal_entries_24h {(j24[0]['n'] if j24 else 0) or 0}",
-                "# HELP np_hosts_total Known machines",
-                "# TYPE np_hosts_total gauge",
-                f"np_hosts_total {(hosts_n[0]['n'] if hosts_n else 0) or 0}",
-            ]
-            for h in self.api.svc.inventory.list_hosts():
-                hname = (h.get("name") or "?").replace('"', "").replace("\n", "")
-                lines.append(
-                    f'np_host_karma{{host="{hname}"}} '
-                    f'{h.get("health_score", 100)}')
-        except Exception:
-            pass
-        body = "\n".join(lines).encode("utf-8")
+        body = render_metrics(self.api.svc).encode('utf-8')
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self._sec()
         self.end_headers()
         self.wfile.write(body)
 

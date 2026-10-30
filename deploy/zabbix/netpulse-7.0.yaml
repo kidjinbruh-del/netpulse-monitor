@@ -1,0 +1,72 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+  - uuid: a12dd9ac808351248766952209c54b80
+    name: Templates/Applications
+  templates:
+  - uuid: 48fcdcfa4dcd5ff28e8dbf74b7cea9f1
+    template: NetPulse by HTTP
+    name: NetPulse by HTTP
+    description: Read-only NetPulse metrics. Configure URL and a dedicated metrics-only
+      bearer token.
+    groups:
+    - name: Templates/Applications
+    macros:
+    - macro: '{$NETPULSE.URL}'
+      value: https://netpulse.example:8770
+    - macro: '{$NETPULSE.TOKEN}'
+      value: ''
+      type: SECRET_TEXT
+    items:
+    - uuid: ec2367c5c1ef598094046a0506c5f59f
+      name: NetPulse metrics
+      type: HTTP_AGENT
+      key: netpulse.metrics
+      delay: 30s
+      history: 1h
+      value_type: TEXT
+      url: '{$NETPULSE.URL}/metrics'
+      headers:
+      - name: Authorization
+        value: Bearer {$NETPULSE.TOKEN}
+      verify_peer: 'YES'
+      verify_host: 'YES'
+    - uuid: 75e291c9f15c5fa8965e9db5ac2b12af
+      name: Exporter available
+      type: DEPENDENT
+      key: netpulse_up
+      value_type: FLOAT
+      master_item:
+        key: netpulse.metrics
+      preprocessing:
+      - type: PROMETHEUS_PATTERN
+        parameters:
+        - netpulse_up
+        - value
+        - ''
+    - uuid: da7f88032a3c58f8a61e60c90a87e0f7
+      name: Network quality
+      type: DEPENDENT
+      key: np_quality_score
+      value_type: FLOAT
+      master_item:
+        key: netpulse.metrics
+      preprocessing:
+      - type: PROMETHEUS_PATTERN
+        parameters:
+        - np_quality_score
+        - value
+        - ''
+    - uuid: 5731117648685a60b9b73faf41548a52
+      name: Unread alerts
+      type: DEPENDENT
+      key: np_alerts_unread
+      value_type: FLOAT
+      master_item:
+        key: netpulse.metrics
+      preprocessing:
+      - type: PROMETHEUS_PATTERN
+        parameters:
+        - np_alerts_unread
+        - value
+        - ''

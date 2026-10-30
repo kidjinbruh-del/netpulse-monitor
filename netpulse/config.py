@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 CONFIG_FILE = "config.json"
 
 DEFAULTS = {
+    "mikrotik": {"enabled": False, "poll_interval_sec": 30, "devices": []},
+    "metrics": {"token_env": "NP_METRICS_TOKEN"},
     "web_port": 8770,
     "web_host": "127.0.0.1",
     "web_auth_enabled": False,

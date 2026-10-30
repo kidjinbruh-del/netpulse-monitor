@@ -1,8 +1,8 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-2.3.4-blue)
+![Version](https://img.shields.io/badge/version-2.4.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
-![Tests](https://img.shields.io/badge/tests-109%2F109-success)
+![Tests](https://github.com/kidjinbruh-del/netpulse-monitor/actions/workflows/tests.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
@@ -17,6 +17,10 @@
 в контуре организации: облачные сервисы не используются.
 
 ---
+
+## MikroTik и история метрик (2.4)
+
+Добавлены опрос RouterOS 6/7 через проверенный TLS, кэш метрик, отдельный токен Prometheus, дашборд Grafana и базовый шаблон Zabbix 7.0. [Настройка и ограничения](docs/mikrotik-monitoring.md). Подключения проверяются на HTTPS/API-SSL имитаторах; физический роутер и живой Zabbix ещё не тестировались.
 
 ## 1. Возможности
 

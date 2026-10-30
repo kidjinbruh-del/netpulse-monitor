@@ -31,3 +31,8 @@ TASK_*.md
 
 # Бинарники CryptoPro (данные сервиса, не код)
 netpulse/p2p_core/services/certstool/*.exe
+
+# Local integration credentials and private CAs
+.env
+deploy/observability/secrets/
+router-ca*.pem

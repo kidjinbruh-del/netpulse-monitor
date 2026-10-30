@@ -342,6 +342,25 @@
     <!-- ============ INFRA ============ -->
     <section class="view" id="view-infra">
       <div class="card">
+        <div class="card-title">MikroTik · RouterOS 6 / 7
+          <button class="btn accent right" id="router-poll" onclick="UI.pollRouters()">Проверить подключение</button>
+          <button class="btn ghost right" onclick="UI.loadRouters()">Обновить статус</button>
+        </div>
+        <p class="muted">Режим чтения: ресурсы роутера, состояние портов и счётчики трафика. Настройки роутера не изменяются.</p>
+        <div id="router-status" role="status" class="result-box muted">Подключение отключено до настройки.</div>
+        <div id="router-devices"></div>
+        <details><summary>Как подключить</summary><div class="result-box">
+          <p>В config.json добавьте mikrotik.enabled=true и devices. Для RouterOS 7 — transport: rest; для 6/7 — api_ssl. Пароль задаётся на машине NetPulse через password_env. Нужны отдельный пользователь с правами чтения и доверенный TLS-сертификат.</p>
+          <pre style="white-space:pre-wrap;overflow-wrap:anywhere">"mikrotik": {"enabled": true, "poll_interval_sec": 30,
+  "devices": [{"id": "edge", "url": "https://router.example:8729",
+    "transport": "api_ssl", "username": "netpulse-read",
+    "password_env": "NP_ROUTER_EDGE_PASSWORD", "ca_file": "router-ca.pem"}]}</pre>
+          <p>После изменения локального конфига перезапустите NetPulse. Для RouterOS до 6.43 добавьте legacy_login: true. Устройства без современного API-SSL/TLS требуют обновления; проверка сертификатов не отключается.</p>
+          <p>Графики и оповещения: готовый стек Prometheus + Grafana находится в deploy/observability; Zabbix может читать те же метрики через HTTP.</p>
+        </div></details>
+      </div>
+
+      <div class="card">
         <div class="card-title">Топология сети
           <span class="right" style="display:inline-flex;gap:6px">
             <button class="mini-btn" title="Скачать SVG" onclick="UI.exportMap('svg')"><svg class="ic sm"><use href="#i-doc"/></svg>SVG</button>

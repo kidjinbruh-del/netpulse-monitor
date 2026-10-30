@@ -27,6 +27,16 @@ def check(config_path='config.json'):
     tls=cfg.get('web_tls') or {}
     if tls.get('enabled'):
         checks.append({'name':'tls-files','ok':all(Path(tls.get(key) or '__missing__').is_file() for key in ('cert','key')),'detail':'configured certificate and key must exist'})
+    from .mikrotik import configured_devices
+    from .routeros import RouterError, credentials, tls_context
+    try:
+        if (cfg.get('mikrotik') or {}).get('enabled'):
+            for device in configured_devices(cfg):
+                credentials(device)
+                tls_context(device)
+            checks.append({'name':'mikrotik','ok':True,'detail':'configuration, environment and CA checked; no connection attempted'})
+    except (RouterError, OSError, ValueError, AttributeError):
+        checks.append({'name':'mikrotik','ok':False,'detail':'check device configuration, password environment variables and CA files'})
     return checks
 
 def main(config_path='config.json'):

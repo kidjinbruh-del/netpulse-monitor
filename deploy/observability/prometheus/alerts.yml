@@ -1,0 +1,28 @@
+groups:
+  - name: netpulse
+    rules:
+      - alert: NetPulseUnavailable
+        expr: up{job="netpulse"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: 'NetPulse exporter unavailable'}
+      - alert: MikroTikUnreachable
+        expr: netpulse_mikrotik_up == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: 'MikroTik poll failed: {{ $labels.router }}'}
+      - alert: MikroTikCollectorStale
+        expr: time() - netpulse_mikrotik_last_poll_timestamp_seconds > (3 * netpulse_mikrotik_poll_interval_seconds + 30)
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: 'MikroTik collector stale: {{ $labels.router }}'}
+      - alert: MikroTikHighCPU
+        expr: netpulse_mikrotik_cpu_percent > 90
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'MikroTik CPU over 90%: {{ $labels.router }}'}
+      - alert: MikroTikLowMemory
+        expr: netpulse_mikrotik_memory_free_bytes / netpulse_mikrotik_memory_total_bytes < 0.1
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'MikroTik free memory below 10%: {{ $labels.router }}'}
