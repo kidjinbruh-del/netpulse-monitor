@@ -33,5 +33,5 @@ jobs:
         run: >-
           docker run --rm --entrypoint /bin/promtool
           -v "${{ github.workspace }}/deploy/observability/prometheus:/etc/prometheus:ro"
-          -v "${{ github.workspace }}/deploy/observability/secrets:/run/secrets:ro"
+          -v "${{ github.workspace }}/deploy/observability/secrets/netpulse_metrics_token.txt:/run/secrets/netpulse_metrics_token:ro"
           prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml
