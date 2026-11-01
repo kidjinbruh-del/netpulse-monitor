@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.database import DatabaseManager
-from netpulse.config import load_config, merge_updates
+from netpulse.config import load_config, merge_updates, save_config
 from netpulse.inventory import Inventory
 from netpulse.mikrotik import MikroTikMonitor
 from netpulse.operations import Operations
@@ -29,9 +29,11 @@ with tempfile.TemporaryDirectory(prefix='netpulse-fixture-') as directory:
         'mikrotik': {'enabled': True, 'devices': [{'id': 'lab',
             'name': 'Office (test fixture)', 'url': 'https://router.invalid',
             'username': 'readonly', 'password_env': 'NP_FIXTURE_ABSENT_PASSWORD'}]}})
+    cfg['backup']['dir'] = str(Path(directory) / 'backups')
+    save_config(cfg)
     svc = MiniService()
     svc.cfg = cfg
-    svc.db = DatabaseManager('fixture.db')
+    svc.db = DatabaseManager('network_stats.db')
     svc.get_snapshot = lambda: {**svc.snapshot, 'ts': time.time()}
     svc.state_json_cached = lambda: json.dumps(svc.get_snapshot())
     svc.inventory = Inventory(svc)

@@ -1769,20 +1769,47 @@ const UI = {
       $("settings-status").textContent = e.message;
     }
   },
+  async backupJob(action, body={}) {
+    const started=await apiPost(action,body);
+    for(let n=0;n<180;n++) {
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      const job=await apiGet('securityresult?job='+encodeURIComponent(started.job));
+      if(job.status==='error') throw new Error(job.error||'Задача не выполнена');
+      if(job.status==='done') return job.result;
+    }
+    throw new Error('Задача ещё выполняется. Обновите список позже.');
+  },
   async backupRun() {
+    $('settings-status').textContent='Создаём согласованный снимок данных…';
     try {
-      const r = await apiPost("backuprun");
-      if (r.ok) {
-        const list = await apiGet("backuplist");
-        const names = (list.backups || []).slice(0, 5)
-          .map(b => `${b.name} (${b.size_mb} MB)`).join("<br>");
-        $("settings-status").innerHTML =
-          `Копия создана: <span class="mono">${esc(r.archive)}</span><br>` +
-          `<span class="muted">Последние копии в ${esc(list.dir || "")}:<br>${names}</span>`;
-      } else {
-        $("settings-status").textContent = `Ошибка: ${r.error || ""}`;
+      const result=await this.backupJob('backupjob');
+      $('settings-status').textContent=result.ok?'Копия создана: '+result.archive:result.error;
+      await this.backupList();
+    } catch(error) { $('settings-status').textContent=error.message; }
+  },
+  async backupList() {
+    const panel=$('backup-list');
+    try {
+      const result=await apiGet('backuplist');
+      panel.textContent='';
+      for(const item of result.backups||[]) {
+        const row=document.createElement('div');row.className='ops-actions';
+        const label=document.createElement('span');label.textContent=item.name+' ('+item.size_mb+' MB)';row.append(label);
+        if(item.name.endsWith('.zip')) {
+          const button=document.createElement('button');button.className='btn';button.textContent='Проверить архив';
+          button.onclick=async()=>{
+            button.disabled=true;$('settings-status').textContent='Проверяем контрольные суммы и SQLite…';
+            try {
+              const checked=await this.backupJob('backupverify',{name:item.name});
+              $('settings-status').textContent='Архив исправен. Таблиц: '+checked.tables+'. '+checked.warning;
+            } catch(error) { $('settings-status').textContent=error.message; }
+            finally { button.disabled=false; }
+          };row.append(button);
+        }
+        panel.append(row);
       }
-    } catch (e) { toast(String(e), true); }
+      if(!panel.childNodes.length)panel.textContent=result.error||'Резервных копий пока нет.';
+    } catch(error) { panel.textContent=error.message; }
   },
 
   /* ---------- sysadmin ---------- */

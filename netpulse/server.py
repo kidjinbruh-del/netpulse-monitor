@@ -18,7 +18,8 @@ import threading
 import subprocess
 import os
 import sys
-import zipfile
+from pathlib import Path
+import sqlite3
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -351,13 +352,9 @@ class FirewallCtl:
 # ================= Автобэкап =================
 
 class BackupManager:
-    RAR_PATHS = ("C:\\Program Files\\WinRAR\\Rar.exe",
-                 "C:\\Program Files (x86)\\WinRAR\\Rar.exe")
-    EXCLUDE_DIRS = {"__pycache__", ".git"}
-    EXCLUDE_SUFFIXES = (".db-wal", ".db-shm")
-
     def __init__(self, config):
         self.cfg = config
+        self.data_dir = Path.cwd()
         self._stop = threading.Event()
 
     def start(self):
@@ -371,13 +368,6 @@ class BackupManager:
             self.run_backup_if_due()
             self._stop.wait(600)
 
-    @classmethod
-    def _find_rar(cls):
-        for p in cls.RAR_PATHS:
-            if os.path.exists(p):
-                return p
-        return None
-
     def run_backup_if_due(self):
         bc = self.cfg.get("backup", {})
         if not (bc.get("enabled") and bc.get("time")):
@@ -389,7 +379,9 @@ class BackupManager:
         try:
             if now >= target_time and (not os.path.exists(stamp_file)
                                        or open(stamp_file).read().strip() != today_stamp):
-                self.run_backup_now()
+                result = self.run_backup_now()
+                if not result.get("ok"):
+                    return
                 os.makedirs(os.path.dirname(stamp_file), exist_ok=True)
                 with open(stamp_file, "w") as f:
                     f.write(today_stamp)
@@ -398,56 +390,30 @@ class BackupManager:
             logger.info(f"[backup] {e}")
 
     def run_backup_now(self, rar=None):
-        """Бэкап исходников: WinRAR, если установлен, иначе zip из stdlib."""
-        bc = self.cfg.get("backup", {})
-        dest_dir = bc.get("dir", "C:\\Backups")
-        os.makedirs(dest_dir, exist_ok=True)
-        src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        stamp = f"{datetime.now():%Y%m%d_%H%M}"
-
-        rar = rar if rar is not None else self._find_rar()
-        if rar:
-            dest = os.path.join(dest_dir, f"netpulse_auto_{stamp}.rar")
-            cmd = [rar, "a", "-r", "-ep1", "-y", "-m5",
-                   "-x*.db-wal", "-x*.db-shm",
-                   "-x*\\__pycache__\\*", "-x*\\__pycache__",
-                   dest, src]
-            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            try:
-                r = subprocess.run(cmd, capture_output=True, timeout=300,
-                                   creationflags=flags)
-                if r.returncode == 0:
-                    return {"ok": True, "archive": dest}
-                logger.info(f"[backup] rar завершился с кодом {r.returncode}, fallback на zip")
-            except Exception as e:
-                logger.warning(f"[backup] rar недоступен ({e}), fallback на zip")
-
-        dest = os.path.join(dest_dir, f"netpulse_auto_{stamp}.zip")
+        """Consistent data bundle. The legacy rar argument is ignored."""
+        from .recovery import create, RecoveryError
         try:
-            with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
-                for root, dirs, files in os.walk(src):
-                    dirs[:] = [d for d in dirs if d not in self.EXCLUDE_DIRS]
-                    for f in files:
-                        if f.endswith(self.EXCLUDE_SUFFIXES):
-                            continue
-                        full = os.path.join(root, f)
-                        if full == dest:
-                            continue
-                        z.write(full, os.path.relpath(full, src))
-            return {"ok": True, "archive": dest}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+            destination = Path(self.cfg.get("backup", {}).get("dir", "C:\\Backups"))
+            if not destination.is_absolute():
+                destination = self.data_dir / destination
+            return create(self.data_dir, destination)
+        except (OSError, RecoveryError, sqlite3.Error):
+            logger.exception("Data backup failed")
+            return {"ok": False, "error": "Не удалось создать снимок: проверьте каталог данных, свободное место и права"}
 
     def rotate(self, keep=7):
-        dest_dir = self.cfg.get("backup", {}).get("dir", "C:\\Backups")
+        dest_dir = Path(self.cfg.get("backup", {}).get("dir", "C:\\Backups"))
         try:
-            archives = sorted(
-                (f for f in os.listdir(dest_dir) if f.startswith("netpulse_auto_")),
-                reverse=True)
+            keep = max(1, min(100, int(keep)))
+            archives = sorted((p for p in dest_dir.iterdir()
+                               if p.is_file() and not p.is_symlink()
+                               and p.name.startswith("netpulse_auto_")
+                               and p.suffix in (".zip", ".rar")),
+                              key=lambda p: p.stat().st_mtime_ns, reverse=True)
             for old in archives[keep:]:
-                os.remove(os.path.join(dest_dir, old))
-        except Exception:
-            pass
+                old.unlink()
+        except (OSError, ValueError, TypeError):
+            logger.warning("Backup retention could not be completed")
 
 
 # ================= API =================
@@ -1101,6 +1067,20 @@ class Api:
         if res.get("ok"):
             self.backup.rotate(int(self.cfg.get("backup", {}).get("keep", 7)))
         return res
+
+    def backup_job(self, q):
+        return {'job': submit_job(lambda: self.backup_run({}))}
+
+    def backup_verify(self, q):
+        from .recovery import inspect
+        name = self._read_body().get('name', '')
+        if not isinstance(name, str) or not name or Path(name).name != name or not name.endswith('.zip'):
+            raise ValueError('Выберите ZIP-архив из списка резервных копий')
+        root = Path(self.cfg.get('backup', {}).get('dir', 'C:\\Backups')).resolve()
+        archive = (root / name).resolve()
+        if archive.parent != root or not archive.is_file():
+            raise ValueError('Архив не найден в каталоге резервных копий')
+        return {'job': submit_job(lambda: inspect(archive))}
 
     def backup_list(self, q):
         d = self.cfg.get("backup", {}).get("dir", "C:\\Backups")
@@ -1793,7 +1773,7 @@ ROUTES_POST = {
     "capturestop": "capture_stop",
     "fwblockip": "firewall_block_ip", "fwblockapp": "firewall_block_app",
     "fwunblock": "firewall_unblock",
-    "backuprun": "backup_run",
+    "backuprun": "backup_run", "backupjob": "backup_job", "backupverify": "backup_verify",
     "journaladd": "journal_add", "journaldel": "journal_delete",
     "runbookexec": "runbook_exec", "watchdogpoll": "watchdog_poll",
     "healthrecompute": "health_recompute", "backupcheck": "backup_check_now",

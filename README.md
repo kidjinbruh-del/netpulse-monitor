@@ -1,12 +1,14 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-2.5.0-blue)
+![Version](https://img.shields.io/badge/version-2.6.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
 ![Tests](https://github.com/kidjinbruh-del/netpulse-monitor/actions/workflows/tests.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
-Версия 2.5: [операционный центр и инструкция подключения](docs/OPERATIONS.md) —
+Версия 2.6: [проверяемые резервные копии и восстановление](docs/RECOVERY.md).
+
+Операционный центр: [операционный центр и инструкция подключения](docs/OPERATIONS.md) —
 площадки и ответственные, инциденты, мастер MikroTik, Alertmanager,
 история доставки уведомлений и проверка готовности сервиса.
 

@@ -49,3 +49,12 @@ test('setup detects missing credentials and stores a reference',async({page})=>{
  await expect(page.locator('#ops-setup-status')).toContainText('Настройки сохранены');
  await expect(page.locator('#ops-devices')).toContainText('Second lab');
 });
+
+test('administrator creates and verifies a consistent backup',async({page})=>{
+ await login(page);
+ await page.getByRole('button',{name:'Настройки',exact:true}).click();
+ await page.getByRole('button',{name:'Копия сейчас',exact:true}).click();
+ await expect(page.locator('#settings-status')).toContainText('Копия создана:',{timeout:30000});
+ await page.getByRole('button',{name:'Проверить архив',exact:true}).click();
+ await expect(page.locator('#settings-status')).toContainText('Архив исправен.',{timeout:30000});
+});
