@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from .routeros import collect, validate_device, RouterError
+from .routeros import collect, validate_device, RouterError, TABLE_GROUPS
 
 
 def number(value):
@@ -58,6 +58,8 @@ def normalize(raw):
         'memory_total_bytes': number(resource.get('total-memory')),
         'uptime_seconds': uptime_seconds(resource.get('uptime')),
         'interfaces': interfaces,
+        'details': {group: [{str(k): str(v)[:256] for k,v in row.items()} for row in raw.get(path, [])[:256]] for group,path in TABLE_GROUPS.items() if path in raw},
+        'table_errors': {group: error for group,path in TABLE_GROUPS.items() for p,error in (raw.get('_table_errors') or {}).items() if p == path},
     }
 
 
@@ -102,6 +104,7 @@ class MikroTikMonitor:
         except Exception:
             row['error'] = 'Router polling failed; check local configuration'
         row['duration_seconds'] = time.monotonic() - started
+        row['checked_at'] = time.time()
         return row
 
     def poll(self):
@@ -124,6 +127,16 @@ class MikroTikMonitor:
                             row['last_success_at'] = old.get(row['id'], {}).get('last_success_at')
                 except RouterError as error:
                     state['error'] = str(error)
+            operations = getattr(self.svc, 'operations', None)
+            if operations:
+                for row in state['devices']:
+                    try:
+                        event = operations.observe_router(row)
+                        if event:
+                            self.svc.notify_external('ROUTER_' + event.upper(), row['name'] + (' — связь восстановлена' if event == 'resolved' else ' — нет связи после повторной проверки'))
+                    except Exception:
+                        state['persistence_error'] = 'Не удалось записать состояние инцидента'
+            state['checked_at'] = time.time()
             with self._lock:
                 self._status = state
             return self.status()

@@ -51,6 +51,7 @@
 
     <nav id="nav">
       <button data-view="dashboard" class="nav-btn active"><svg class="ic"><use href="#i-dash"/></svg>Дашборд</button>
+      <button data-view="operations" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Операционный центр</button>
       <button data-view="journal" class="nav-btn"><svg class="ic"><use href="#i-clock"/></svg>Журнал</button>
       <button data-view="apps" class="nav-btn"><svg class="ic"><use href="#i-apps"/></svg>Приложения<span id="apps-live-dot" class="live-dot hidden"></span></button>
       <button data-view="traffic" class="nav-btn"><svg class="ic"><use href="#i-globe"/></svg>Соединения</button>
@@ -666,10 +667,53 @@
       </div>
     </section>
 
+
+    <section class="view" id="view-operations">
+      <div class="card"><div class="card-title">Операционный центр <button class="btn ghost right" onclick="Ops.load()">Обновить</button></div>
+        <p id="ops-summary" role="status">Загрузка…</p><div id="ops-health" class="muted"></div>
+      </div>
+      <div class="card"><div class="card-title">Устройства и площадки</div>
+        <label>Поиск по имени, адресу, площадке или ответственному <input id="ops-search" type="search" maxlength="160" placeholder="Например, офис или 192.168…"></label>
+        <div class="ops-scroll"><table class="tbl"><thead><tr><th>Устройство</th><th>Адрес</th><th>Состояние</th><th>Площадка / ответственный</th></tr></thead><tbody id="ops-devices"></tbody></table></div>
+        <div id="ops-device-detail" hidden></div>
+      </div>
+      <div class="card"><div class="card-title">Инциденты</div>
+        <p class="muted">Отказ MikroTik открывает один инцидент после двух неудачных опросов. Восстановление закрывает его; техническое окно подавляет новые инциденты.</p>
+        <div class="ops-scroll"><table class="tbl"><thead><tr><th>Проблема</th><th>Состояние</th><th>Ответственный</th><th>Обновление</th></tr></thead><tbody id="ops-incidents"></tbody></table></div>
+        <div id="ops-incident-detail" hidden></div>
+      </div>
+      <div class="card" id="ops-admin"><div class="card-title">Подключить MikroTik</div>
+        <p class="muted">Сохраняется только ссылка на пароль в окружении сервера. После сохранения устройство подхватится следующим опросом; запись в конфигурацию роутера не выполняется.</p>
+        <form id="ops-setup-form"><div class="ops-grid">
+          <label>ID устройства<input name="id" required pattern="[A-Za-z0-9_-]{1,48}" maxlength="48" placeholder="office-router"></label>
+          <label>Название<input name="name" maxlength="160" placeholder="Роутер офиса"></label>
+          <label>HTTPS-адрес<input name="url" required placeholder="https://router.example:8729"></label>
+          <label>Транспорт<select name="transport"><option value="rest">RouterOS 7 · REST</option><option value="api_ssl">RouterOS 6/7 · API-SSL</option></select></label>
+          <label>Пользователь только чтения<input name="username" required maxlength="128" autocomplete="off"></label>
+          <label>Переменная окружения с паролем<input name="password_env" required pattern="[A-Za-z_][A-Za-z0-9_]{0,127}" placeholder="NP_ROUTER_OFFICE_PASSWORD"></label>
+          <label>Файл CA на сервере (при частной CA)<input name="ca_file" maxlength="512" placeholder="C:/NetPulse/certs/router-ca.pem"></label>
+          <label>Тайм-аут, сек<input name="timeout_sec" type="number" min="1" max="10" value="5" required></label>
+        </div><label><input type="checkbox" name="legacy_login"> Старый API login (RouterOS до 6.43)</label>
+        <details><summary>Дополнительные таблицы — запрашиваются только при выборе</summary><div class="ops-grid" id="ops-tables">
+          <label><input type="checkbox" name="tables" value="dhcp"> DHCP leases</label><label><input type="checkbox" name="tables" value="arp"> ARP</label>
+          <label><input type="checkbox" name="tables" value="addresses"> IP-адреса</label><label><input type="checkbox" name="tables" value="vlan"> Bridge VLAN</label>
+          <label><input type="checkbox" name="tables" value="bridge_hosts"> Bridge hosts</label><label><input type="checkbox" name="tables" value="ppp"> PPP</label>
+          <label><input type="checkbox" name="tables" value="health"> Температура / питание</label><label><input type="checkbox" name="tables" value="wifi"> Wi-Fi (новый драйвер)</label>
+          <label><input type="checkbox" name="tables" value="wireless"> Wireless (старый драйвер)</label>
+        </div></details>
+        <div class="ops-actions"><button type="button" class="btn ghost" id="ops-probe">Проверить подключение</button><button class="btn accent" type="submit">Сохранить устройство</button><button type="reset" class="btn ghost">Очистить форму</button></div>
+        <p id="ops-setup-status" role="status"></p><div id="ops-configured"></div></form>
+      </div>
+      <div class="card"><div class="card-title">Доставка уведомлений <button class="btn ghost right" id="ops-test-notifications" onclick="Ops.testNotifications()">Отправить тест в настроенные каналы</button></div>
+        <p class="muted">Статус «отправлено» означает принятие транспортом, а не прочтение человеком. Каналы настраиваются в разделе «Настройки».</p>
+        <div class="ops-scroll"><table class="tbl"><thead><tr><th>Канал</th><th>Событие</th><th>Результат</th><th>Попытки</th></tr></thead><tbody id="ops-deliveries"></tbody></table></div>
+      </div>
+    </section>
   </main>
 </div>
 
 <div id="toast-wrap"></div>
+<script src="/operations.js"></script>
 <script src="/app.js"></script>
   <script>if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));</script>
 </body>

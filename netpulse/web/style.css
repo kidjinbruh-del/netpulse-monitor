@@ -302,3 +302,6 @@ button, .btn { min-height: 36px; }
 #jr-text { width:100%; }
 .journal-entry-fields { flex-wrap:wrap; }
 @media(max-width:480px) { .journal-entry-fields #jr-user { flex-basis:100% !important; } .journal-entry-fields .btn { flex:1; } }
+
+/* Operations workspace */
+.ops-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:16px 0}.ops-grid label{display:flex;flex-direction:column;gap:6px;min-width:0}.ops-grid input:not([type=checkbox]),.ops-grid select,#ops-search{width:100%;min-width:0}.ops-grid label:has(input[type=checkbox]){display:block}.ops-scroll{overflow:auto;max-width:100%;margin:14px 0}.ops-actions{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}.ops-detail{padding:18px;border:1px solid var(--border,#354052);border-radius:12px;margin:16px 0}.ops-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}.ops-detail textarea{width:100%;min-height:80px}.ops-status{font-weight:600}.ops-table-button{color:var(--accent,#64a0ff);background:none;border:0;text-align:left;cursor:pointer;font:inherit;padding:8px 0}.ops-table-button:focus-visible{outline:2px solid currentColor;outline-offset:3px}@media(max-width:650px){.ops-grid{grid-template-columns:1fr}.ops-actions .btn{flex:1 1 150px}.ops-detail{padding:12px}}

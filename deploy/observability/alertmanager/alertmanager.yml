@@ -1,0 +1,15 @@
+route:
+  receiver: netpulse
+  group_by: [alertname, router]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+receivers:
+  - name: netpulse
+    webhook_configs:
+      - url: http://host.docker.internal:8770/api/alertmanager
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/netpulse_alertmanager_token

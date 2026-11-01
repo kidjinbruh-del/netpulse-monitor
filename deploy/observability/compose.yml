@@ -10,6 +10,16 @@ services:
       - prometheus-data:/prometheus
     secrets: [netpulse_metrics_token]
     command: ['--config.file=/etc/prometheus/prometheus.yml', '--storage.tsdb.retention.time=15d']
+  alertmanager:
+    image: prom/alertmanager:v0.34.2
+    restart: unless-stopped
+    ports: ['127.0.0.1:9093:9093']
+    extra_hosts: ['host.docker.internal:host-gateway']
+    secrets: [netpulse_alertmanager_token]
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command: ['--config.file=/etc/alertmanager/alertmanager.yml']
   grafana:
     image: grafana/grafana:13.3.0
     restart: unless-stopped
@@ -24,10 +34,13 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
 secrets:
+  netpulse_alertmanager_token:
+    file: ./secrets/netpulse_alertmanager_token.txt
   netpulse_metrics_token:
     file: ./secrets/netpulse_metrics_token.txt
   grafana_admin_password:
     file: ./secrets/grafana_admin_password.txt
 volumes:
+  alertmanager-data:
   prometheus-data:
   grafana-data:

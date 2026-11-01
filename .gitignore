@@ -36,3 +36,6 @@ netpulse/p2p_core/services/certstool/*.exe
 .env
 deploy/observability/secrets/
 router-ca*.pem
+node_modules/
+test-results/
+playwright-report/

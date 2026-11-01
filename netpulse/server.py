@@ -34,6 +34,8 @@ from core.utils import decode_process_output
 from . import __version__
 from .services import MonitorService
 from .metrics import render_metrics
+from .health import report as health_report
+from . import onboarding
 from .mesh import MeshClient, MeshError, MeshHub
 import logging
 
@@ -56,7 +58,7 @@ SAFE_TARGET = re.compile(r"^[A-Za-z0-9._\-]{1,253}$")
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 # Ключи конфига, которые нельзя менять через API (только правкой config.json)
-PROTECTED_SETTINGS = {"web_auth_enabled", "mikrotik", "metrics"}
+PROTECTED_SETTINGS = {"web_auth_enabled", "mikrotik", "metrics", "alertmanager"}
 
 # ---------- защита от брутфорса токена ----------
 AUTH_FAILS = {}   # ip -> [count, window_start]
@@ -1576,7 +1578,60 @@ class Api:
                LIMIT 100""", fetch=True) or []
         products = [(r["name"], r["version"]) for r in rows]
         found = self.svc.cve.check_products(products)
-        return {"found": found, "products": len(products)}
+        return {"found": found, "products": len(products), "status": self.svc.cve.status()}
+
+    def operations_state(self, q):
+        ops = getattr(self.svc, 'operations', None)
+        if not ops:
+            return (503, {'error': 'Модуль операций недоступен'})
+        return {'role': self._cached_role, 'summary': ops.summary(), 'devices': ops.devices(q.get('search', [''])[0], q.get('site', [''])[0], q.get('tag', [''])[0]),
+                'incidents': ops.incidents(q.get('status', [''])[0]),
+                'deliveries': self.svc.notifications.history(), 'health': health_report(self.svc)}
+
+    def device_detail(self, q):
+        return self.svc.operations.device(q.get('id', [''])[0])
+
+    def incident_detail(self, q):
+        return self.svc.operations.incident(q.get('id', [''])[0])
+
+    def device_metadata(self, q):
+        return self.svc.operations.save_context(self._read_body())
+
+    def incident_change(self, q):
+        return self.svc.operations.change_incident(self._read_body(), self._cached_actor or 'admin')
+
+    def incident_create(self, q):
+        body = self._read_body()
+        device = body.get('device_id', '')
+        if device:
+            self.svc.operations.device(device)
+        ident, _ = self.svc.operations.open_incident(device, body.get('title', ''), body.get('severity', 'warning'), actor=self._cached_actor or 'admin')
+        return self.svc.operations.incident(ident)
+
+    def device_configuration(self, q):
+        if self._cached_role != 'admin':
+            return (403, {'error': 'Требуются права администратора'})
+        return onboarding.configuration(self.svc)
+
+    def device_save(self, q):
+        return onboarding.save_device(self.svc, self._read_body())
+
+    def device_probe(self, q):
+        device = onboarding.validate(self._read_body())
+        return {'job': submit_job(lambda: onboarding.probe(device))}
+
+    def notifications_test(self, q):
+        ids = self.svc.notifications.enqueue('Проверка доставки', 'Тестовое уведомление NetPulse по команде администратора')
+        return {'queued': len(ids), 'ids': ids}
+
+    def alertmanager_receive(self, q):
+        result = self.svc.operations.receive_alerts(self._read_body())
+        for title, message in result.pop('notifications'):
+            self.svc.notifications.enqueue(title, message)
+        return result
+
+    def health_get(self, q):
+        return health_report(self.svc)
 
     def mikrotik_status(self, q):
         monitor = getattr(self.svc, 'mikrotik', None)
@@ -1687,6 +1742,8 @@ class Api:
 
 
 ROUTES_GET = {
+    'operations': 'operations_state', 'device': 'device_detail', 'incident': 'incident_detail',
+    'deviceconfig': 'device_configuration', 'health': 'health_get',
     "state": "state", "history": "history", "dbhistory": "db_history",
     "interfaces": "interfaces", "connections": "connections",
     "topprocesses": "top_processes",
@@ -1725,6 +1782,9 @@ ROUTES_GET = {
     "p2pmetrics": "p2p_metrics",
 }
 ROUTES_POST = {
+    'devicemeta': 'device_metadata', 'incidentchange': 'incident_change', 'incidentcreate': 'incident_create',
+    'alertmanager': 'alertmanager_receive',
+    'devicesave': 'device_save', 'deviceprobe': 'device_probe', 'notificationtest': 'notifications_test',
     "settings": "settings_post",
     "alertsack": "alerts_ack", "aitrain": "ai_train",
     "securityscan": "security_scan", "mtrstart": "mtr_start",
@@ -1774,8 +1834,9 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(users, list):
             for u in users:
                 if isinstance(u, dict) and u.get("token"):
-                    role = "viewer" if str(u.get("role", "admin")) == "viewer" \
-                        else "admin"
+                    role = str(u.get('role', 'viewer'))
+                    if role not in ('admin', 'operator', 'viewer'):
+                        role = 'viewer'
                     candidates.append((str(u.get("name") or "?"),
                                        str(u["token"]), role))
         if cfg.get("web_token"):
@@ -1795,6 +1856,12 @@ class Handler(BaseHTTPRequestHandler):
                                              tok.encode("utf-8")):
                     return (name, role)
         return None
+
+    def _receiver_authed(self):
+        env = (self.api.cfg.get('alertmanager') or {}).get('token_env', 'NP_ALERTMANAGER_TOKEN')
+        expected = os.environ.get(env, '')
+        supplied = self.headers.get('Authorization', '')
+        return bool(expected and supplied.startswith('Bearer ') and hmac.compare_digest(supplied[7:].encode(), expected.encode()))
 
     def _metrics_authed(self):
         env_name = (self.api.cfg.get('metrics') or {}).get('token_env', 'NP_METRICS_TOKEN')
@@ -1932,6 +1999,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "forbidden: IP вне разрешённых сетей"},
                             403)
             return
+        if path in ('/healthz', '/readyz'):
+            ready = health_report(self.api.svc)['status'] == 'ok' if path == '/readyz' else True
+            self._send_json({'status': 'ok' if ready else 'degraded'}, 200 if ready else 503)
+            return
         wait = _auth_blocked(ip)
         if wait:
             self._send_json(
@@ -2008,7 +2079,7 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, KeyError, IndexError) as e:
                 self._send_json({"error": f"неверный запрос: {e}"}, 400)
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                self._send_json({'error': 'Внутренняя ошибка; проверьте журнал сервера'}, 500)
             return
 
         if path == "/journal.csv":
@@ -2042,7 +2113,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                self._send_json({'error': 'Внутренняя ошибка; проверьте журнал сервера'}, 500)
             return
 
         if path == "/journal.txt":
@@ -2063,7 +2134,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body.encode("utf-8-sig"))
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                self._send_json({'error': 'Внутренняя ошибка; проверьте журнал сервера'}, 500)
             return
 
         if path == "/report.txt":
@@ -2100,7 +2171,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                self._send_json({'error': 'Внутренняя ошибка; проверьте журнал сервера'}, 500)
             return
 
         self._static(path)
@@ -2141,8 +2212,13 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         is_login = path == "/api/login"
+        is_receiver = path == '/api/alertmanager'
+        receiver_authorized = is_receiver and self._receiver_authed()
+        if is_receiver and not receiver_authorized:
+            self._send_json({'error': 'unauthorized receiver'}, 401)
+            return
         if not is_login:
-            if not self._authed(qs):
+            if not receiver_authorized and not self._authed(qs):
                 just_blocked = _auth_fail(ip, path, "POST")
                 try:
                     self.api.svc.push_alert(
@@ -2166,7 +2242,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"error": "csrf: недопустимый Origin"}, 403)
                 return
             # X-Auth обязателен только при включённой авторизации
-            if (self.api.cfg.get("web_auth_enabled")
+            if (self.api.cfg.get("web_auth_enabled") and not receiver_authorized
                     and not self.headers.get("X-Auth")):
                 self._send_json({"error": "нужен заголовок X-Auth"}, 403)
                 return
@@ -2264,13 +2340,13 @@ class Handler(BaseHTTPRequestHandler):
         # RBAC: viewer (низкая роль) — только подтверждение алертов и алиасы
         ident = self._identity(qs)
         role = ident[1] if ident else "admin"
-        if ident and role == "viewer" and name not in ("alertsack", "lanalias"):
-            self._send_json(
-                {"error": "forbidden: роль viewer не позволяет изменение"}, 403)
+        operator_actions = {'alertsack', 'lanalias', 'devicemeta', 'incidentchange', 'incidentcreate'}
+        if ident and (role == 'viewer' or (role == 'operator' and name not in operator_actions)):
+            self._send_json({'error': 'forbidden: недостаточно прав для действия'}, 403)
             return
 
         self.api._cached_body = body
-        ident2 = ident or ("admin", "admin")
+        ident2 = ("alertmanager", "receiver") if receiver_authorized else ident or ("admin", "admin")
         self.api._cached_actor = ident2[0]
         self.api._cached_role = ident2[1]
         self._user_role = ident2[1]

@@ -21,6 +21,7 @@ jobs:
       - run: python -m pytest -q
       - run: node --check netpulse/web/app.js
       - run: node --check netpulse/web/sw.js
+      - run: node --check netpulse/web/operations.js
       - run: node tests/frontend.cjs
 
   prometheus-config:
@@ -35,3 +36,29 @@ jobs:
           -v "${{ github.workspace }}/deploy/observability/prometheus:/etc/prometheus:ro"
           -v "${{ github.workspace }}/deploy/observability/secrets/netpulse_metrics_token.txt:/run/secrets/netpulse_metrics_token:ro"
           prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml
+
+  browser-and-monitoring:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements-dev.txt psutil scikit-learn pandas numpy fastapi uvicorn websockets msgpack pydantic PyYAML watchdog colorama
+      - run: npm install --no-save --package-lock=false @playwright/test@1.64.1
+      - run: npx playwright install --with-deps chromium
+      - name: Start isolated fixture
+        run: NP_FIXTURE_HOST=0.0.0.0 NP_FIXTURE_PORT=8770 python tests/browser_server.py > /tmp/netpulse-fixture.log 2>&1 &
+      - run: npx playwright test tests/operations.spec.cjs --workers=1 --reporter=line
+      - run: python tests/monitoring_smoke.py
+      - name: Fixture diagnostics
+        if: always()
+        run: cat /tmp/netpulse-fixture.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-results
+          path: test-results/

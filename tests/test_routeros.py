@@ -64,6 +64,7 @@ def rest_router(tls_files,router_device):
    if path=='interface/print':
     body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
     assert body['stats']=='' and 'rx-byte' in body['.proplist'];path='interface'
+   if path not in RAW:self.send_error(404);return
    data=json.dumps(RAW[path]).encode();self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
  srv=ThreadingHTTPServer(('127.0.0.1',0),Handler);srv.socket=context.wrap_socket(srv.socket,server_side=True)
  t=threading.Thread(target=srv.serve_forever,daemon=True);t.start()
@@ -187,3 +188,25 @@ def test_rotated_token_returned_once_and_redacted_secrets_survive_save():
   result=json.loads(text);new=result['new_token'];assert len(new)==32
   assert _get(base+'/api/settings',{'X-Auth':'old-admin'})[0]==401
   code,text=_get(base+'/api/settings',{'X-Auth':new});assert code==200 and new not in text
+
+
+def test_optional_tables_do_not_break_core_poll(rest_router,monkeypatch):
+ cfg,_=rest_router
+ monkeypatch.setitem(RAW,'ip/arp',[{'address':'192.0.2.1','mac-address':'00:11:22:33:44:55','interface':'bridge'}])
+ from netpulse.routeros import collect
+ result=normalize(collect({**cfg,'tables':['arp','dhcp']}))
+ assert result['cpu_percent']==12
+ assert result['details']['arp'][0]['address']=='192.0.2.1'
+ assert 'dhcp' in result['table_errors']
+
+def test_api_trap_is_drained_before_next_command(router_device):
+ def sentence(*words):return b''.join(encode_length(len(w.encode()))+w.encode() for w in words)+b'\0'
+ data=sentence('!trap','=message=denied')+sentence('!done')+sentence('!re','=name=ether1')+sentence('!done')
+ class Socket:
+  def __init__(self):self.data=io.BytesIO(data)
+  def recv(self,n):return self.data.read(n)
+  def settimeout(self,n):pass
+  def sendall(self,n):pass
+ client=ApiSSLClient(router_device);client.sock=Socket()
+ with pytest.raises(RouterError):client._exchange(['/unknown/print'])
+ assert client._exchange(['/interface/print'])[0]==[{'name':'ether1'}]

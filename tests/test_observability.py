@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1] / 'deploy'
 def test_provisioning_has_consistent_datasource_and_dashboard():
     base = ROOT / 'observability'
     compose = yaml.safe_load((base/'compose.yml').read_text(encoding='utf-8'))
-    assert set(compose['services']) == {'prometheus', 'grafana'}
+    assert set(compose['services']) == {'prometheus', 'grafana', 'alertmanager'}
     for service in compose['services'].values():
         assert all(port.startswith('127.0.0.1:') for port in service['ports'])
     dashboard = json.loads((base/'grafana/dashboards/netpulse.json').read_text(encoding='utf-8'))

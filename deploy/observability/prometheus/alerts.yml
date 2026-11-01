@@ -7,7 +7,7 @@ groups:
         labels: {severity: critical}
         annotations: {summary: 'NetPulse exporter unavailable'}
       - alert: MikroTikUnreachable
-        expr: netpulse_mikrotik_up == 0
+        expr: netpulse_mikrotik_up == 0 and on(job, instance, router) netpulse_mikrotik_maintenance == 0
         for: 2m
         labels: {severity: critical}
         annotations: {summary: 'MikroTik poll failed: {{ $labels.router }}'}

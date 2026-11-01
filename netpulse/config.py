@@ -6,6 +6,7 @@ import json
 import copy
 import os
 import uuid
+import tempfile
 from datetime import datetime
 
 from core.secrets import encrypt_config, decrypt_config
@@ -17,6 +18,7 @@ CONFIG_FILE = "config.json"
 DEFAULTS = {
     "mikrotik": {"enabled": False, "poll_interval_sec": 30, "devices": []},
     "metrics": {"token_env": "NP_METRICS_TOKEN"},
+    "alertmanager": {"token_env": "NP_ALERTMANAGER_TOKEN"},
     "web_port": 8770,
     "web_host": "127.0.0.1",
     "web_auth_enabled": False,
@@ -312,8 +314,21 @@ def save_config(cfg, path=CONFIG_FILE):
     try:
         _backup_config(path)
         stored = encrypt_config(copy.deepcopy(cfg))   # секреты -> dpapi:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(stored, f, ensure_ascii=False, indent=2)
+        directory = os.path.dirname(os.path.abspath(path))
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=directory,
+                    prefix='.netpulse-config-', suffix='.tmp', delete=False) as f:
+                temporary = f.name
+                json.dump(stored, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            if os.path.exists(path):
+                os.chmod(temporary, os.stat(path).st_mode & 0o777)
+            os.replace(temporary, path)
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
         return True
     except Exception as e:
         logger.error(f"[config] ошибка сохранения: {e}")

@@ -43,6 +43,8 @@ from .geo import country as geo_country, top_countries, flag as geo_flag
 from .cve import CVEChecker
 from .proxmox import ProxmoxClient
 from .mikrotik import MikroTikMonitor
+from .operations import Operations
+from .notifications import Notifications
 import logging
 
 logger = logging.getLogger(__name__)
@@ -827,6 +829,8 @@ class MonitorService:
         self.l2map = L2Map(self)
         self.cve = CVEChecker(self)
         self.proxmox = ProxmoxClient(self)
+        self.operations = Operations(self)
+        self.notifications = Notifications(self)
         self.mikrotik = MikroTikMonitor(self)
 
         self._lock = threading.RLock()
@@ -965,7 +969,8 @@ class MonitorService:
 
     def stop(self):
         self._stop_event.set()
-        for stopper in (lambda: self.pinger.stop(),
+        for stopper in (lambda: self.notifications.stop(),
+                        lambda: self.pinger.stop(),
                         lambda: self.ai.stop(),
                         lambda: self.mtr.stop(),
                         lambda: self.capture.stop(),
@@ -1328,72 +1333,7 @@ class MonitorService:
             logger.info(f"[alerts] {e}")
 
     def notify_external(self, alert_type, message):
-        tg = self.cfg.get("telegram", {})
-        if tg.get("enabled") and tg.get("token") and tg.get("chat_id"):
-            def send_tg():
-                try:
-                    url = (f"https://api.telegram.org/bot{tg['token']}/sendMessage")
-                    from urllib.request import Request, urlopen
-                    import urllib.parse
-                    body = urllib.parse.urlencode({
-                        "chat_id": tg["chat_id"],
-                        "text": f"[NetPulse] {alert_type}\n{message}",
-                    }).encode()
-                    req = Request(url, data=body)
-                    urlopen(req, timeout=5)
-                except Exception:
-                    pass
-            threading.Thread(target=send_tg, daemon=True).start()
-
-        # Generic webhook: Slack/Discord/Mattermost/Teams/свой бэкенд
-        wh = self.cfg.get("webhook") or {}
-        if wh.get("enabled") and wh.get("url"):
-            def send_hook():
-                try:
-                    from urllib.request import Request, urlopen
-                    payload = json.dumps({
-                        "type": alert_type, "message": message,
-                        "source": "netpulse",
-                        "ts": _now_iso(),
-                        "text": f"[NetPulse] {alert_type}: {message}",
-                    }, ensure_ascii=False).encode("utf-8")
-                    req = Request(wh["url"], data=payload,
-                                  headers={"Content-Type":
-                                           "application/json; charset=utf-8"})
-                    urlopen(req, timeout=5)
-                except Exception:
-                    pass
-            threading.Thread(target=send_hook, daemon=True).start()
-
-        # Email (SMTP, stdlib)
-        em = self.cfg.get("email") or {}
-        if em.get("enabled") and em.get("smtp_host") and em.get("to"):
-            def send_mail():
-                try:
-                    import smtplib
-                    from email.mime.text import MIMEText
-                    from email.header import Header
-                    msg = MIMEText(f"{message}\n\nИсточник: {source}\n"
-                                   f"Время: {_now_iso()}",
-                                   "plain", "utf-8")
-                    msg["Subject"] = Header(
-                        f"[NetPulse] {alert_type}", "utf-8")
-                    msg["From"] = em.get("from") or "netpulse@localhost"
-                    msg["To"] = em["to"]
-                    srv = smtplib.SMTP(em["smtp_host"],
-                                       int(em.get("smtp_port") or 25),
-                                       timeout=10)
-                    try:
-                        if em.get("use_tls"):
-                            srv.starttls()
-                        if em.get("user") and em.get("password"):
-                            srv.login(em["user"], em["password"])
-                        srv.sendmail(msg["From"], [em["to"]], msg.as_string())
-                    finally:
-                        srv.quit()
-                except Exception as e:
-                    logger.warning(f"email: {e}")
-            threading.Thread(target=send_mail, daemon=True).start()
+        return self.notifications.enqueue(alert_type, message)
 
     # ---------- сохранение ----------
 
@@ -1471,8 +1411,14 @@ class MonitorService:
 
     def apply_settings(self, updates):
         from .config import merge_updates, save_config
-        merge_updates(self.cfg, updates)
-        save_config(self.cfg)
+        from .onboarding import LOCK
+        import copy
+        with LOCK:
+            candidate = copy.deepcopy(self.cfg)
+            merge_updates(candidate, updates)
+            if not save_config(candidate):
+                raise ValueError('Не удалось сохранить настройки')
+            self.cfg.update(candidate)
         try:
             self.pinger.set_target(self.cfg.get("ping_target", "8.8.8.8"))
             self.pinger.set_thresholds(self._alert_thresholds())

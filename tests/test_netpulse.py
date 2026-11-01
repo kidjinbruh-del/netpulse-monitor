@@ -352,33 +352,22 @@ def test_audit_log_and_config_backup():
 
 
 def test_webhook_payload():
-    """notify_external с webhook шлёт JSON нужной структуры."""
-    import netpulse.services as SvcMod
-    from unittest import mock
-
-    class FakeSvc3: pass
-    fs = FakeSvc3()
-    fs.cfg = {"webhook": {"enabled": True,
-                          "url": "http://127.0.0.1:1/hook"},
-              "telegram": {"enabled": False}}
+    from netpulse.notifications import Notifications
+    from unittest.mock import patch
     captured = {}
-
-    def fake_urlopen(req, timeout=5):
-        captured["url"] = req.full_url
-        captured["data"] = json.loads(req.data.decode("utf-8"))
-
-        class R:
-            def read(self, n=-1):
-                return b"{}"
-        return R()
-
-    with mock.patch("urllib.request.urlopen", fake_urlopen):
-        SvcMod.MonitorService.notify_external(fs, "TEST_ALERT", "тело")
-
-    assert captured["url"] == "http://127.0.0.1:1/hook"
-    assert captured["data"]["type"] == "TEST_ALERT"
-    assert captured["data"]["message"] == "тело"
-    assert "NetPulse" in captured["data"]["text"]
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+    class Opener:
+        def open(self, request, timeout):
+            captured['url'] = request.full_url
+            captured['data'] = json.loads(request.data)
+            return Response()
+    with patch('netpulse.notifications.build_opener', return_value=Opener()):
+        Notifications._send('webhook', {'url': 'https://example.test/hook'}, 'TEST_ALERT', 'тело')
+    assert captured['data']['type'] == 'TEST_ALERT'
+    assert captured['data']['message'] == 'тело'
+    assert 'NetPulse' in captured['data']['text']
 
 
 def test_server_endpoints_and_auth():

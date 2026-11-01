@@ -21,6 +21,25 @@ FIELDS = {
     'system/identity': ('name',),
     'interface': ('name', 'type', 'running', 'disabled', 'rx-byte', 'tx-byte', 'rx-error', 'tx-error', 'rx-drop', 'tx-drop'),
 }
+TABLE_GROUPS = {
+    'dhcp': 'ip/dhcp-server/lease', 'arp': 'ip/arp', 'addresses': 'ip/address',
+    'vlan': 'interface/bridge/vlan', 'bridge_hosts': 'interface/bridge/host',
+    'ppp': 'ppp/active', 'health': 'system/health',
+    'wifi': 'interface/wifi/registration-table', 'wireless': 'interface/wireless/registration-table',
+}
+FIELDS.update({
+    'ip/dhcp-server/lease': ('address','mac-address','host-name','status','server','expires-after'),
+    'ip/arp': ('address','mac-address','interface','complete','dynamic'),
+    'ip/address': ('address','network','interface','disabled'),
+    'interface/bridge/vlan': ('bridge','vlan-ids','tagged','untagged','current-tagged','current-untagged'),
+    'interface/bridge/host': ('mac-address','vid','on-interface','bridge','local','dynamic'),
+    'ppp/active': ('name','service','address','uptime'),
+    'system/health': ('name','value','type'),
+    'interface/wifi/registration-table': ('interface','mac-address','signal','uptime','tx-rate','rx-rate'),
+    'interface/wireless/registration-table': ('interface','mac-address','signal-strength','uptime','tx-rate','rx-rate'),
+})
+CORE_PATHS = ('system/resource', 'system/identity', 'interface')
+
 MAX_BYTES = 2 * 1024 * 1024
 MAX_ROWS = 256
 
@@ -63,6 +82,9 @@ def validate_device(device):
             raise ValueError()
     except (TypeError, ValueError):
         raise RouterError('timeout_sec must be 1..10')
+    tables = device.get('tables', [])
+    if not isinstance(tables, list) or len(tables) > len(TABLE_GROUPS) or any(not isinstance(t, str) or t not in TABLE_GROUPS for t in tables):
+        raise RouterError('Unknown optional table group')
     return url, port, timeout
 
 
@@ -174,6 +196,7 @@ class ApiSSLClient:
         self.sock.settimeout(self.timeout)
         self.sock.sendall(data)
         rows, sentence, total, word_count = [], [], 0, 0
+        denied = False
         while True:
             size = self._length()
             total += size
@@ -187,9 +210,13 @@ class ApiSSLClient:
                 continue
             kind = sentence[0]
             attrs = dict(word[1:].split('=', 1) for word in sentence[1:] if word.startswith('=') and '=' in word[1:])
-            if kind in ('!trap', '!fatal'):
-                raise RouterError('API request denied; check credentials, permissions and RouterOS support')
+            if kind == '!fatal':
+                raise RouterError('API connection rejected')
+            if kind == '!trap':
+                denied = True
             if kind == '!done':
+                if denied:
+                    raise RouterError('API request denied; check permissions and RouterOS support')
                 return rows, attrs
             if kind == '!re':
                 rows.append(attrs)
@@ -237,8 +264,18 @@ class ApiSSLClient:
 
 
 def collect(device):
+    def read(client):
+        result = {path: client.read(path) for path in CORE_PATHS}
+        errors = {}
+        for group in dict.fromkeys(device.get('tables', [])):
+            path = TABLE_GROUPS[group]
+            try:
+                result[path] = client.read(path)
+            except RouterError as error:
+                errors[path] = str(error)
+        result['_table_errors'] = errors
+        return result
     if device.get('transport', 'rest') == 'rest':
-        client = RestClient(device)
-        return {path: client.read(path) for path in FIELDS}
+        return read(RestClient(device))
     with ApiSSLClient(device) as client:
-        return {path: client.read(path) for path in FIELDS}
+        return read(client)

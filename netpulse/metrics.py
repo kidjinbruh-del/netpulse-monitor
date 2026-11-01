@@ -25,6 +25,7 @@ class Exposition:
 
 
 def render_metrics(service, now=None):
+    now = time.time() if now is None else now
     snap = service.get_snapshot()
     out = Exposition()
     out.add('netpulse_up','NetPulse exporter available','gauge',1)
@@ -57,8 +58,15 @@ def render_metrics(service, now=None):
     monitor = getattr(service,'mikrotik',None)
     state = monitor.status() if monitor else {'enabled':False,'devices':[]}
     out.add('netpulse_mikrotik_enabled','MikroTik collector enabled','gauge',int(state['enabled']))
+    operations = getattr(service, 'operations', None)
+    contexts = operations.contexts() if operations else {}
+    if operations:
+        for status, count in operations.summary().items():
+            if status != 'scope':
+                out.add('netpulse_incidents', 'Incidents among latest 500', 'gauge', count, status=status)
     for device in state['devices'][:16]:
         labels = {'router':device['id']}
+        out.add('netpulse_mikrotik_maintenance', 'Router maintenance window active', 'gauge', int(contexts.get('router:'+device['id'], {}).get('maintenance_until', 0) > now), **labels)
         try:
             interval = max(15, min(3600, int((service.cfg.get('mikrotik') or {}).get('poll_interval_sec', 30))))
         except (ValueError, TypeError, AttributeError):

@@ -208,6 +208,7 @@ function sparklineSVG(values, color) {
 /* ================= UI ================= */
 
 const VIEW_TITLES = {
+  operations: "Операционный центр",
   dashboard: "Дашборд", journal: "Журнал работ", apps: "Приложения и сеть",
   traffic: "Соединения и интерфейсы", diag: "Диагностика сети",
   lan: "Локальная сеть", park: "Парк ПК", infra: "Инфраструктура",
@@ -323,6 +324,7 @@ const UI = {
     if (view === "alerts") this.loadAlerts();
     if (view === "history") this.loadHistory();
     if (view === "settings") this.loadSettings();
+    if (view === "operations") Ops.load();
     if (view === "journal") this.loadJournal();
     if (view === "park") this.loadPark();
     if (view === "infra") { this.loadInfra(); this.loadCustomChecks(); this.loadRouters(); }

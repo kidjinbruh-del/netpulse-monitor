@@ -12,3 +12,8 @@ scrape_configs:
     authorization:
       type: Bearer
       credentials_file: /run/secrets/netpulse_metrics_token
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
