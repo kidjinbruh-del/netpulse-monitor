@@ -53,7 +53,8 @@ jobs:
       - name: Start isolated fixture
         run: NP_FIXTURE_HOST=0.0.0.0 NP_FIXTURE_PORT=8770 python tests/browser_server.py > /tmp/netpulse-fixture.log 2>&1 &
       - name: Wait for fixture readiness
-        run: python -c "from tests.monitoring_smoke import eventually, request; eventually(lambda: request('http://127.0.0.1:8770/healthz'))"
+        run: >-
+          python -c "from tests.monitoring_smoke import eventually, request; eventually(lambda: request('http://127.0.0.1:8770/healthz'))"
       - run: npx playwright test tests/operations.spec.cjs --workers=1 --reporter=line
       - run: python tests/monitoring_smoke.py
       - name: Fixture diagnostics
