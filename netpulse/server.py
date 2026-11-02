@@ -869,6 +869,13 @@ class Api:
 
     # ----- LAN -----
 
+    def lan_scan_job(self, q):
+        from .lan_discovery import select
+        selected = select(self._read_body().get('interface'))
+        if selected['hosts'] > 1024:
+            raise ValueError('Подсеть содержит больше 1024 адресов')
+        return {'job': submit_job(lambda: self.svc.lan.scan(interface=selected['id'])), 'network': selected}
+
     def lan_scan(self, q):
         job_id = submit_job(lambda: self.svc.lan.scan())
         deadline = time.time() + 90
@@ -882,17 +889,22 @@ class Api:
         return (504, {"error": "скан превысил таймаут"})
 
     def lan_devices(self, q):
-        try:
-            base, my_ip = self.svc.lan.local_subnet()
-            subnet = f"{base}0/24"
-        except Exception:
-            base, my_ip, subnet = "", "", ""
-        try:
-            self_name = socket.gethostname()
-        except Exception:
-            self_name = ""
-        return {"devices": self.svc.lan.devices_from_db(),
-                "subnet": subnet, "self_ip": my_ip, "self_name": self_name}
+        from .lan_discovery import interfaces
+        available = interfaces()
+        identifier = q.get('interface', [''])[0]
+        selected = next((item for item in available if item['id'] == identifier), None)
+        selected = selected or (available[0] if available else {})
+        devices = self.svc.lan.devices_from_db()
+        if selected.get('subnet'):
+            network = ipaddress.ip_network(selected['subnet'])
+            devices = [item for item in devices if item.get('ip') and
+                       _ip_in_network(item['ip'], str(network))]
+        return {'devices': devices, 'interfaces': available,
+                'subnet': selected.get('subnet', ''), 'self_ip': selected.get('ip', ''),
+                'selected_interface': selected.get('id', ''), 'self_name': socket.gethostname(),
+                'scanning': self.svc.lan.scanning, 'last_result': self.svc.lan.last_result,
+                'last_network': getattr(self.svc.lan, 'last_network', None),
+                'warning': getattr(self.svc.lan, 'last_error', '')}
 
     def lan_alias(self, q):
         body = self._read_body()
@@ -1768,7 +1780,7 @@ ROUTES_POST = {
     "settings": "settings_post",
     "alertsack": "alerts_ack", "aitrain": "ai_train",
     "securityscan": "security_scan", "mtrstart": "mtr_start",
-    "mtrstop": "mtr_stop", "lanscan": "lan_scan",
+    "mtrstop": "mtr_stop", "lanscan": "lan_scan", "lanscanjob": "lan_scan_job",
     "portscan": "port_scan", "capturestart": "capture_start",
     "capturestop": "capture_stop",
     "fwblockip": "firewall_block_ip", "fwblockapp": "firewall_block_app",
@@ -2472,7 +2484,8 @@ def run(config):
             webbrowser_open(url)
         except Exception:
             pass
-    threading.Timer(0.9, _open).start()
+    if os.environ.get('NETPULSE_NO_BROWSER') != '1':
+        threading.Timer(0.9, _open).start()
 
     try:
         httpd.serve_forever(poll_interval=0.5)

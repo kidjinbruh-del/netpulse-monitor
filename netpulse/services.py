@@ -415,6 +415,9 @@ class LANNetworkScanner:
     def __init__(self, service):
         self.svc = service
         self.scanning = False
+        self._scan_lock = threading.Lock()
+        self.last_error = ""
+        self.last_network = None
         self.last_result = []
         self.known_macs = set()
         self._load_known()
@@ -429,16 +432,9 @@ class LANNetworkScanner:
 
     @staticmethod
     def local_subnet():
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-        except Exception:
-            ip = "192.168.1.1"
-        finally:
-            s.close()
-        parts = ip.split(".")
-        return ".".join(parts[:3]) + ".", ip
+        from .lan_discovery import select
+        selected = select()
+        return selected['ip'].rsplit('.', 1)[0] + '.', selected['ip']
 
     def auto_loop(self, interval_min: int):
         """Периодический автоскан подсети: новые ПК попадают в базу сами."""
@@ -449,112 +445,106 @@ class LANNetworkScanner:
                 logger.info(f"[lan] auto-scan: {e}")
             self.svc._stop_event.wait(max(60, int(interval_min) * 60))
 
-    def arp_table(self):
-        table = {}
+    def arp_table(self, selected):
+        from .lan_discovery import arp_entries, valid_mac
         try:
-            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            out = subprocess.run(["arp", "-a"], capture_output=True, timeout=6,
-                                 creationflags=flags)
+            if sys.platform.startswith('linux'):
+                try:
+                    output = subprocess.run(['ip', '-j', 'neigh', 'show', 'dev', selected['name']],
+                                            capture_output=True, timeout=6)
+                    if output.returncode == 0:
+                        import ipaddress
+                        network = ipaddress.ip_network(selected['subnet'])
+                        rows = json.loads(output.stdout)
+                        table = {}
+                        for row in rows:
+                            mac = valid_mac(row.get('lladdr', ''))
+                            try:
+                                address = ipaddress.ip_address(row.get('dst', ''))
+                            except ValueError:
+                                continue
+                            if mac and address in network and not set(row.get('state', [])) & {'FAILED', 'INCOMPLETE'}:
+                                table[str(address)] = mac
+                        return table
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass
+            command = ['arp', '-a']
+            if sys.platform == 'win32':
+                command += ['-N', selected['ip']]
+            else:
+                command += ['-i', selected['name']]
+            flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            output = subprocess.run(command, capture_output=True, timeout=6, creationflags=flags)
             from core.utils import decode_process_output
-            text = decode_process_output(out.stdout)
-            for line in text.splitlines():
-                m = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b.*?"
-                              r"([0-9a-fA-F]{2}(?:[:\-][0-9a-fA-F]{2}){5})", line)
-                if m:
-                    table[m.group(1)] = m.group(2).lower().replace("-", ":")
-        except Exception:
-            pass
-        return table
+            return arp_entries(decode_process_output(output.stdout), selected['subnet'])
+        except (OSError, subprocess.SubprocessError):
+            return {}
 
-    def scan(self, progress_cb=None):
-        if self.scanning:
-            return self.last_result
+    def scan(self, progress_cb=None, interface=None):
+        import ipaddress
+        from concurrent.futures import ThreadPoolExecutor
+        from .lan_discovery import select, ping_reply, valid_mac
+        from core.utils import decode_process_output
+        selected = select(interface)
+        network = ipaddress.ip_network(selected['subnet'])
+        if selected['hosts'] > 1024:
+            raise ValueError('Подсеть содержит больше 1024 адресов. Выберите меньшую сеть для ручной проверки.')
+        if not hasattr(self, '_scan_lock'):
+            self._scan_lock = threading.Lock()
+        if not self._scan_lock.acquire(blocking=False):
+            raise ValueError('Сканирование уже выполняется')
         self.scanning = True
-        base, my_ip = self.local_subnet()
-        arp = {}
-
-        def probe(last_octet, results):
-            ip = f"{base}{last_octet}"
-            cmd = (["ping", "-n", "1", "-w", "250", ip] if sys.platform == "win32"
-                   else ["ping", "-c", "1", "-W", "1", ip])
-            flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            try:
-                r = subprocess.run(cmd, capture_output=True, timeout=2,
-                                   creationflags=flags)
-                from core.utils import decode_process_output
-                txt = decode_process_output(r.stdout)
-                if re.search(r"[=<]\s*\d+\s*(?:мс|ms)", txt, re.IGNORECASE) or r.returncode == 0 and "TTL" in txt.upper():
-                    results.append(ip)
-            except Exception:
-                pass
-
-        results = []
-        threads = []
-        sem = threading.Semaphore(60)
-
-        def wrapped(n):
-            with sem:
-                probe(n, results)
-
-        for n in range(1, 255):
-            t = threading.Thread(target=wrapped, args=(n,), daemon=True)
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join(timeout=6)
-
-        arp = self.arp_table()
-        devices = []
-        for ip in sorted(results, key=lambda x: tuple(map(int, x.split(".")))):
-            hostname = "-"
-            try:
-                hostname = socket.gethostbyaddr(ip)[0]
-            except Exception:
-                pass
-            mac = arp.get(ip, "")
-            if not mac and ip == my_ip:
+        self.last_error = ''
+        self.last_network = selected
+        self.last_result = []
+        failures = []
+        try:
+            def probe(ip):
+                command = (['ping', '-n', '1', '-w', '400', '-S', selected['ip'], ip] if sys.platform == 'win32'
+                           else ['ping', '-c', '1', '-W', '1', '-I', selected['ip'], ip])
+                flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 try:
-                    for if_name, addrs in psutil.net_if_addrs().items():
-                        for a in addrs:
-                            if a.family == psutil.AF_LINK and a.address:
-                                if_ip = next(
-                                    (x.address for x in addrs
-                                     if x.family == socket.AF_INET
-                                     and not x.address.startswith("169.")), "")
-                                if if_ip == ip:
-                                    mac = a.address
-                except Exception:
-                    pass
-            vendor = next((v for pref, v in OUI_VENDORS.items()
-                           if mac.startswith(pref.lower())), "")
-            is_new = bool(mac) and mac not in self.known_macs
-            dev = {"ip": ip, "mac": mac or "-", "hostname": hostname,
-                   "vendor": vendor or ("—" if mac else ""),
-                   "is_me": ip == my_ip, "is_new": is_new}
-            devices.append(dev)
-            if mac:
-                try:
-                    self.svc.db.execute(
-                        """INSERT INTO lan_devices (mac, ip, hostname, vendor, first_seen, last_seen)
-                           VALUES (?,?,?,?,?,?)
-                           ON CONFLICT(mac) DO UPDATE SET
-                             ip=excluded.ip, hostname=excluded.hostname,
-                             last_seen=excluded.last_seen""",
-                        (mac, ip, hostname, vendor, _now_iso(), _now_iso()))
-                    trusted = (self.svc.cfg.get("lan", {}) or {}).get(
-                        "trusted_macs") or []
-                    if is_new and mac not in {str(t).lower() for t in trusted}:
-                        self.svc.push_alert(
-                            "LAN_NEW_DEVICE",
-                            f"Новое устройство в сети: {ip} ({mac}) {vendor}".strip(),
-                            "lan")
-                        self.known_macs.add(mac)
-                except Exception:
-                    pass
-
-        self.last_result = devices
-        self.scanning = False
-        return devices
+                    result = subprocess.run(command, capture_output=True, timeout=2, creationflags=flags)
+                    return ip if ping_reply(result.returncode, decode_process_output(result.stdout)) else None
+                except (OSError, subprocess.SubprocessError):
+                    failures.append(ip)
+                    return None
+            addresses = [str(ip) for ip in network.hosts() if str(ip) != selected['ip']]
+            with ThreadPoolExecutor(max_workers=32, thread_name_prefix='np-lan') as pool:
+                responders = {ip for ip in pool.map(probe, addresses) if ip}
+            arp = self.arp_table(selected)
+            discovered = responders | set(arp) | {selected['ip']}
+            own_mac = ''
+            for address in psutil.net_if_addrs().get(selected['name'], []):
+                if address.family == psutil.AF_LINK:
+                    own_mac = valid_mac(address.address)
+            devices = []
+            for ip in sorted(discovered, key=ipaddress.ip_address):
+                is_me = ip == selected['ip']
+                mac = own_mac if is_me else arp.get(ip, '')
+                hostname = socket.gethostname() if is_me else '-'
+                vendor = next((value for prefix, value in OUI_VENDORS.items() if mac.startswith(prefix.lower())), '')
+                is_new = bool(mac) and mac not in self.known_macs
+                dev = {'ip':ip, 'mac':mac or '-', 'hostname':hostname, 'vendor':vendor,
+                       'is_me':is_me, 'is_new':is_new, 'source':'self' if is_me else 'icmp' if ip in responders else 'arp',
+                       'online':True if is_me or ip in responders else None}
+                devices.append(dev)
+                if mac:
+                    self.svc.db.execute('''INSERT INTO lan_devices(mac,ip,hostname,vendor,first_seen,last_seen)
+                        VALUES(?,?,?,?,?,?) ON CONFLICT(mac) DO UPDATE SET ip=excluded.ip,
+                        hostname=CASE WHEN excluded.hostname='-' THEN lan_devices.hostname ELSE excluded.hostname END,
+                        last_seen=excluded.last_seen''', (mac,ip,hostname,vendor,_now_iso(),_now_iso()))
+                    trusted = (self.svc.cfg.get('lan') or {}).get('trusted_macs') or []
+                    if is_new and mac not in {str(value).lower() for value in trusted}:
+                        self.svc.push_alert('LAN_NEW_DEVICE',f'Обнаружен адрес: {ip} ({mac}); источник {dev["source"]}','lan')
+                    self.known_macs.add(mac)
+            if failures:
+                self.last_error = 'Часть ping-проверок не выполнена: проверьте наличие ping и ограничения системы'
+            self.last_result = devices
+            return devices
+        finally:
+            self.scanning = False
+            self._scan_lock.release()
 
     def devices_from_db(self, limit=200):
         try:

@@ -279,7 +279,9 @@
         <div class="card-title">Устройства в локальной сети
           <button class="btn accent right" id="lan-scan-btn" onclick="UI.lanScan()"><svg class="ic sm"><use href="#i-search"/></svg>Сканировать подсеть</button>
         </div>
-        <div id="lan-status" class="result-box muted">База известных устройств + сканирование ping-ом всех адресов /24, MAC и вендор из ARP</div>
+        <label for="lan-interface">Сетевой интерфейс для сканирования</label>
+        <select id="lan-interface" class="inp" onchange="UI.lanDevices()"><option value="">Определяем локальные сети…</option></select>
+        <div id="lan-status" class="result-box muted">Выберите подключённую сеть. Маска берётся из настроек интерфейса; записи ARP не гарантируют доступность устройства сейчас.</div>
         <table class="tbl" id="lan-table">
           <thead><tr><th>IP</th><th>MAC</th><th>Вендор</th><th>Hostname</th><th>Алиас</th><th>Первый раз</th><th>Последний раз</th><th></th></tr></thead>
           <tbody></tbody></table>

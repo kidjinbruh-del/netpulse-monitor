@@ -754,25 +754,25 @@ const UI = {
 
   /* ---------- LAN ---------- */
   async lanScan() {
-    const btn = $("lan-scan-btn");
-    btn.disabled = true;
-    this.setBox("lan-status", "Сканирование 254 адресов (пинг + ARP + reverse DNS)… до минуты");
-    let devices = [];
+    const btn=$('lan-scan-btn');btn.disabled=true;$('lan-interface').disabled=true;
+    let devices=[];
     try {
-      const d = await apiPost("lanscan", {});
-      devices = d.devices || [];
-      this.renderLan(devices, []);
-      this.setBox("lan-status",
-        `Онлайн сейчас: <b>${devices.length}</b> устройств. Новые помечены бейджем NEW.`);
-    } catch (e) {
-      this.setBox("lan-status", "Ошибка: " + e.message);
-    } finally {
-      btn.disabled = false;
-      try {
-        const d2 = await apiGet("landevices");
-        this.renderLan(devices, d2.devices);   // свежие first/last seen из БД
-      } catch (e) { this.lanDevices(); }
-    }
+      const started=await apiPost('lanscanjob',{interface:$('lan-interface').value});
+      this.setBox('lan-status','Сканирование '+esc(started.network.name)+' · '+esc(started.network.subnet)+'; ping и ARP. Ожидайте…');
+      let done=false;
+      for(let n=0;n<120;n++) {
+        await new Promise(resolve=>setTimeout(resolve,1000));
+        const job=await apiGet('securityresult?job='+encodeURIComponent(started.job));
+        if(job.status==='error')throw new Error(job.error||'Сканирование не выполнено');
+        if(job.status==='done') {devices=job.result||[];done=true;break;}
+      }
+      if(!done)throw new Error('Сканирование ещё выполняется. Обновите раздел позже.');
+      const state=await apiGet('landevices');
+      this.renderLan(devices,state.devices);
+      const confirmed=devices.filter(d=>d.online===true).length;
+      this.setBox('lan-status','Обнаружено: <b>'+devices.length+'</b>. Доступность подтверждена: <b>'+confirmed+'</b>. ARP-запись может быть устаревшей.'+(state.warning?' '+esc(state.warning):''));
+    } catch(error) {this.setBox('lan-status','Ошибка: '+esc(error.message));}
+    finally {btn.disabled=false;$('lan-interface').disabled=false;}
   },
   renderLan(devices, dbDevices) {
     const map = {};
@@ -796,7 +796,7 @@ const UI = {
              value="${esc(map[d.mac]?.alias || "")}"
              data-mac="${esc(d.mac)}" onchange="UI.saveAlias(this)"></td>
         <td class="muted">${esc((map[d.mac]?.first_seen || "—").slice(0, 16).replace("T", " "))}</td>
-        <td class="muted">${esc((d.is_me ? "это этот ПК" : (map[d.mac]?.last_seen || "").slice(0, 16).replace("T", " ") || "—"))}</td>
+        <td class="muted">${esc(d.is_me ? 'это этот ПК' : d.online===true ? 'отвечает на ping' : d.source==='arp' ? 'ARP-кэш: доступность не подтверждена' : (map[d.mac]?.last_seen || '—').slice(0,16).replace('T',' '))}</td>
         <td><button class="mini-btn" title="Скан портов устройства"
           onclick="document.getElementById('pscan-host').value='${esc(d.ip)}';UI.portScan()">
           <svg class="ic sm"><use href="#i-search"/></svg></button></td>
@@ -814,12 +814,15 @@ const UI = {
   },
   async lanDevices() {
     try {
-      const d = await apiGet("landevices");
+      const choice=$('lan-interface').value;
+      const d = await apiGet('landevices?interface='+encodeURIComponent(choice));
+      const select=$('lan-interface');
+      select.innerHTML=(d.interfaces||[]).map(item=>'<option value="'+esc(item.id)+'">'+esc(item.name+' · '+item.subnet+(item.virtual?' · виртуальный':''))+'</option>').join('');
+      select.value=d.selected_interface||'';
       if (d.subnet)
         this.setBox("lan-status",
           `Подсеть <b>${esc(d.subnet)}</b> · главный узел: <b>${esc(d.self_name)}</b> (${esc(d.self_ip)}) · устройств в базе: ${d.devices.length}`);
-      if (!($("lan-table").querySelector("tbody").children.length))
-        this.renderLan([], d.devices);
+      this.renderLan(d.last_network?.id===d.selected_interface ? d.last_result||[] : [], d.devices);
     } catch (e) { void e; }
   },
 
