@@ -1,5 +1,7 @@
 # Linux: установка и проверка
 
+Для Linux Mint 22.x: [отдельный установщик и инструкция](LINUX-MINT.md).
+
 Требуются Python 3.12+, модуль venv, iputils-ping и iproute2.
 Для Ubuntu/Debian подготовьте системные зависимости:
 

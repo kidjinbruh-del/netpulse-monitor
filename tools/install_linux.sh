@@ -28,6 +28,7 @@ applications.mkdir(parents=True, exist_ok=True)
 def quoted(value):
     return '"' + str(value).replace('\\','\\\\').replace('"','\\"').replace('`','\\`').replace('$','\\$').replace('%','%%') + '"'
 desktop = ('[Desktop Entry]\nType=Application\nName=NetPulse\nComment=Local network operations dashboard\n'
+           'Comment[ru]=Мониторинг сети и управление ИТ-инфраструктурой\nStartupNotify=false\n'
            'Exec='+quoted(root/'.venv'/'bin'/'python')+' '+quoted(root/'tools'/'launch_netpulse.py')+'\n'
            'Icon='+str(root/'netpulse'/'web'/'icon.svg')+'\nTerminal=false\nCategories=Network;\n')
 (applications/'netpulse.desktop').write_text(desktop, encoding='utf-8')

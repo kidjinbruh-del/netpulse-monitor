@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import socket
+import shutil
 import subprocess
 import sys
 import time
@@ -134,6 +135,11 @@ def main():
             stream.write(time.strftime('%Y-%m-%d %H:%M:%S ') + str(error) + '\n')
         if os.name == 'nt' and not args.no_browser:
             ctypes.windll.user32.MessageBoxW(None, str(error) + '\n\nLogs: ' + str(LOGS), 'NetPulse', 0x10)
+        elif not args.no_browser and (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')) and shutil.which('zenity'):
+            subprocess.Popen(['zenity','--error','--title=NetPulse',
+                              '--text='+str(error)+'\n\nLogs: '+str(LOGS)],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
         elif sys.stderr:
             print(str(error), file=sys.stderr)
         return 1

@@ -38,7 +38,7 @@ jobs:
           prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml
 
   linux-vm-lab:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,10 +47,12 @@ jobs:
       - name: Install Linux networking and desktop validation tools
         run: sudo apt-get update -qq && sudo apt-get install -y iputils-ping iproute2 desktop-file-utils
       - name: Install into isolated Python environment
-        run: bash tools/install_linux.sh
+        run: |
+          bash install_mint.sh --check
+          bash install_mint.sh --skip-system-packages --no-desktop
       - name: Validate launch files
         run: |
-          bash -n open_netpulse.sh tools/install_linux.sh tools/linux_lab.sh
+          bash -n install_mint.sh open_netpulse.sh tools/install_linux.sh tools/linux_lab.sh
           desktop-file-validate "$HOME/.local/share/applications/netpulse.desktop"
           systemd-analyze verify "$HOME/.config/systemd/user/netpulse.service"
       - name: Start real Linux server using launcher
