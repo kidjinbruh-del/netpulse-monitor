@@ -120,7 +120,7 @@ class CVEChecker:
             if cached:
                 for c in cached:
                     if c["cve"]:
-                        found.append({**c, "product": name})
+                        found.append({**c, "product": name, "version": ver})
                 continue
             try:
                 results = self._query(f"{name} {ver}".strip())

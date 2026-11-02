@@ -1,6 +1,6 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-2.8.0-blue)
+![Version](https://img.shields.io/badge/version-2.8.1-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
 ![Tests](https://github.com/kidjinbruh-del/netpulse-monitor/actions/workflows/tests.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -9,6 +9,8 @@
 Linux Mint 22.x: `bash install_mint.sh` — [установка и запуск](docs/LINUX-MINT.md).
 
 Версия 2.8: [рабочие разделы, таблицы, состояния данных и P2P](docs/WORKSPACES.md).
+
+Версия 2.8.1: [Сисадмин, топология, runbooks и автозапуск администратора](docs/SYSADMIN.md).
 
 Версия 2.7: [Linux и изолированный стенд](docs/LINUX.md), [запуск с рабочего стола](docs/DESKTOP-LAUNCHER.md).
 
@@ -137,8 +139,7 @@ python main.py
 **Автозапуск с правами администратора:**
 
 ```powershell
-schtasks /Create /TN "NetPulse" /SC ONLOGON /RL HIGHEST /F /TR ^
-  "powershell -NoProfile -WindowStyle Hidden -File 'C:\путь\к\проекту\start_netpulse.ps1'"
+.\tools\install_autostart.ps1 -StartNow
 ```
 
 ---

@@ -158,7 +158,7 @@ DEFAULTS = {
         "enabled": False,
         "host": "",
         "port": 8006,
-        "verify_tls": False,
+        "verify_tls": True,
         "token_id": "",
         "token_secret": ""
     },

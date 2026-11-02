@@ -21,6 +21,9 @@ import subprocess
 import sys
 import threading
 import time
+import shutil
+import psutil
+import html
 from datetime import datetime
 
 from core.utils import decode_process_output
@@ -51,6 +54,7 @@ EXAMPLE_DISKS = {
     "name": "Диски этого сервера",
     "description": "Быстрый взгляд на свободное место локально",
     "scope": "local",
+    "builtin": "disk_space",
     "command": ("Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | "
                 "Select-Object DeviceID,"
                 "@{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,1)}} "
@@ -104,9 +108,12 @@ class RunbookRunner:
     def list(self):
         return [{
             "id": rb["id"], "name": rb.get("name", rb["id"]),
-            "description": rb.get("description", ""),
+            "description": html.unescape(rb.get("description", "")),
             "scope": rb.get("scope", "local"),
             "params": [p.get("name") for p in (rb.get("params") or [])],
+            "fields": rb.get("params") or [],
+            "supported": rb.get('builtin') == 'disk_space' or sys.platform == 'win32',
+            "changes_state": rb.get('builtin') != 'disk_space',
         } for rb in self._defs.values()]
 
     # ---------- выполнение ----------
@@ -129,9 +136,14 @@ class RunbookRunner:
         return clean, None
 
     def execute(self, rb_id, params=None, actor="admin"):
+        if not self.svc.cfg.get('runbooks', {}).get('enabled', True):
+            return {"ok": False, "error": "Runbooks отключены"}
         rb = self._defs.get(str(rb_id))
         if not rb:
             return {"ok": False, "error": "runbook не найден"}
+        builtin = rb.get('builtin') == 'disk_space'
+        if not builtin and sys.platform != 'win32':
+            return {"ok": False, "error": "Этот сценарий требует Windows и PowerShell"}
         clean, err = self._validate_params(rb, params)
         if err:
             return {"ok": False, "error": err}
@@ -158,7 +170,7 @@ class RunbookRunner:
             if not host:
                 return {"ok": False, "error": "для remote нужен host"}
             cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                   f"Invoke-Command -ComputerName {host} "
+                   f"Invoke-Command -ComputerName '{host}' "
                    f"-ScriptBlock {{ {rendered} }}"]
         else:
             cmd = ["powershell", "-NoProfile", "-NonInteractive",
@@ -166,11 +178,28 @@ class RunbookRunner:
 
         t0 = time.time()
         exit_code, output = -1, ""
+        disk_rows = []
         try:
-            proc = subprocess.run(cmd, capture_output=True,
+            if builtin:
+                seen = set()
+                for partition in psutil.disk_partitions(all=False):
+                    if partition.mountpoint in seen: continue
+                    seen.add(partition.mountpoint)
+                    try:
+                        usage = shutil.disk_usage(partition.mountpoint)
+                        disk_rows.append({'device': partition.device, 'mount': partition.mountpoint,
+                                          'total_gb': round(usage.total/1073741824,1),
+                                          'free_gb': round(usage.free/1073741824,1),
+                                          'used_pct': round(100*usage.used/usage.total,1) if usage.total else None})
+                    except OSError: continue
+                exit_code = 0 if disk_rows else 1
+                output = '\n'.join(f"{r['mount']}: свободно {r['free_gb']} из {r['total_gb']} GB" for r in disk_rows) or 'Не удалось прочитать локальные диски'
+            else:
+                cmd[-1] = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + cmd[-1]
+                proc = subprocess.run(cmd, capture_output=True,
                                   timeout=EXEC_TIMEOUT, creationflags=flags)
-            exit_code = proc.returncode
-            output = decode_process_output(
+                exit_code = proc.returncode
+                output = decode_process_output(
                 (proc.stdout or b"") + (proc.stderr or b""))[:2000]
         except subprocess.TimeoutExpired:
             output = f"таймаут {EXEC_TIMEOUT}s"
@@ -206,7 +235,7 @@ class RunbookRunner:
             pass
 
         return {"ok": ok, "exit_code": exit_code, "seconds": elapsed,
-                "output": output.strip()}
+                "output": output.strip(), "disks": disk_rows, "target": host or "Этот сервер", "runbook": rb_id}
 
     def recent_log(self, limit=50):
         limit = min(max(int(limit or 50), 1), 200)

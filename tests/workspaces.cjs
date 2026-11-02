@@ -16,7 +16,7 @@ const base=process.env.NP_TEST_URL||'http://127.0.0.1:8796';
  await page.route('**/api/dbhistory?*',r=>r.fulfill({json:{buckets:[{kbps:10,ping:15,jitter:2,loss:0},{kbps:null,ping:null,jitter:null,loss:null},{kbps:20,ping:30,jitter:4,loss:1}]}}));
  await page.route('**/api/alerts?*',r=>r.fulfill({json:{alerts:[{alert_type:'WARN',message:'New fixture event',acknowledged:false,timestamp:'2026-11-02T01:00:00'},{alert_type:'INFO',message:'Read fixture event',acknowledged:true,timestamp:'2026-11-02T00:00:00'}]}}));
  await page.goto(base+'/#lan');
- await page.locator('#login-token').fill('ci-admin'); await page.getByRole('button',{name:'Войти',exact:true}).click();
+ await page.locator('#login-token').fill('ci-admin'); await Promise.all([page.waitForEvent('load'),page.getByRole('button',{name:'Войти',exact:true}).click()]);
  await page.locator('#view-lan .workspace-head').waitFor();
  await page.waitForFunction(()=>document.querySelectorAll('#lan-table tbody tr').length===2);
  const views=await page.locator('.nav-btn').evaluateAll(bs=>bs.map(b=>b.dataset.view));

@@ -1274,6 +1274,7 @@ class Api:
 
     def runbooks_list(self, q):
         return {"runbooks": self.svc.runbooks.list(),
+                "enabled": bool(self.cfg.get('runbooks',{}).get('enabled',True)),
                 "log": self.svc.runbooks.recent_log(20)}
 
     def runbook_exec(self, q):
@@ -1283,9 +1284,7 @@ class Api:
             else {}
         actor = (getattr(self, "_cached_actor", None)
                  or str(body.get("actor") or "admin"))
-        res = self.svc.runbooks.execute(rb, params, actor)
-        code = 200 if res.get("ok") else 400
-        return (code, res)
+        return {'job': submit_job(lambda: self.svc.runbooks.execute(rb, params, actor))}
 
     def backup_status_list(self, q):
         return {"backups": self.svc.backupwatch.status_list(),
@@ -1466,7 +1465,7 @@ class Api:
         nodes.append({"name": self_name, "ip": self_ip,
                       "alias": aliases_by_ip.get(self_ip, ""),
                       "hostname": hostnames_by_ip.get(self_ip, ""),
-                      "kind": "master", "online": True, "karma": 100,
+                      "kind": "master", "online": True, "karma": None,
                       "sys_name": self_name, "sys_descr": "",
                       "uptime_h": None, "snmp": False, "vendor": "",
                       "os": "", "layer": "pc"})
@@ -1477,7 +1476,7 @@ class Api:
             nodes.append({"name": "шлюз", "ip": gw,
                           "alias": aliases_by_ip.get(gw, ""),
                           "hostname": hostnames_by_ip.get(gw, ""),
-                          "kind": "router", "online": True, "karma": 100,
+                          "kind": "router", "online": gw_row.get("online"), "karma": gw_row.get("health_score"),
                           "sys_name": gw_row.get("sys_name") or "",
                           "sys_descr": gw_row.get("sys_descr") or "",
                           "uptime_h": gw_row.get("uptime_h"),
@@ -1491,13 +1490,13 @@ class Api:
             if not ip or ip in seen_ip:
                 continue
             kind = h.get("dtype") or ("router" if ip == gw else "host")
-            online = bool(h.get("online"))
+            online = h.get("online")
             node = {
                 "name": h["name"], "ip": ip,
                 "alias": aliases_by_ip.get(ip, ""),
                 "hostname": hostnames_by_ip.get(ip, ""),
                 "kind": kind, "online": online,
-                "karma": h.get("health_score", 100),
+                "karma": h.get("health_score"),
                 "sys_name": h.get("sys_name") or "",
                 "sys_descr": h.get("sys_descr") or "",
                 "uptime_h": h.get("uptime_h"),
@@ -1569,15 +1568,31 @@ class Api:
     def cve_status(self, q):
         st = self.svc.cve.status()
         st["enabled"] = bool(self.cfg.get("cve", {}).get("enabled"))
+        st["nvd_key"] = bool(os.environ.get('NP_NVD_API_KEY'))
+        st["last_result"] = getattr(self.svc.cve, 'last_result', None)
         return st
 
     def cve_scan(self, q):
-        rows = self.svc.db.execute(
-            """SELECT name, version FROM sw_inventory
-               LIMIT 100""", fetch=True) or []
-        products = [(r["name"], r["version"]) for r in rows]
-        found = self.svc.cve.check_products(products)
-        return {"found": found, "products": len(products), "status": self.svc.cve.status()}
+        if not self.cfg.get('cve', {}).get('enabled'):
+            return (503, {'error': 'CVE-проверка отключена в конфигурации', 'code': 'cve_disabled'})
+        checker = self.svc.cve
+        if not checker._lock.acquire(blocking=False):
+            return (409, {'error': 'CVE-проверка уже выполняется'})
+        def run():
+            try:
+                rows = self.svc.db.execute("SELECT DISTINCT name, version FROM sw_inventory WHERE name IS NOT NULL AND TRIM(name)<>'' AND version IS NOT NULL AND TRIM(version)<>'' LIMIT 100", fetch=True) or []
+                found = checker.check_products([(r['name'],r['version']) for r in rows])
+                result = {'found': found, 'products': len(rows), 'complete': not bool(checker.last_error),
+                          'error': checker.last_error, 'checked_at': datetime.now().isoformat()}
+                checker.last_result = result
+                return result
+            finally:
+                checker._lock.release()
+        try:
+            return {'job': submit_job(run)}
+        except Exception:
+            checker._lock.release()
+            raise
 
     def operations_state(self, q):
         ops = getattr(self.svc, 'operations', None)
@@ -1646,7 +1661,7 @@ class Api:
         return self.svc.proxmox.status()
 
     def proxmox_poll(self, q):
-        return self.svc.proxmox.poll()
+        return {'job': submit_job(self.svc.proxmox.poll)}
 
     def l2_scan(self, q):
         return self.svc.l2map.scan()

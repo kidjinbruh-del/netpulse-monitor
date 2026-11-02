@@ -329,10 +329,11 @@
             <thead><tr><th>Время</th><th>Машина</th><th>Тип</th><th>Тяжесть</th><th>Описание</th></tr></thead>
             <tbody></tbody></table>
         </div>
-        <div class="card">
-          <div class="card-title">Runbooks — кнопки вместо рутины</div>
+        <div class="card wide">
+          <div class="card-title">Сценарии обслуживания · Runbooks</div>
+          <p class="sa-note">Локальные проверки читают данные этого сервера. Удалённые сценарии требуют явной цели и подтверждения. Каждый запуск записывается в журнал.</p>
           <div id="rb-list" class="result-box muted">—</div>
-          <div id="rb-output" class="result-box mono hidden"></div>
+          <form id="rb-form" class="rb-form" hidden></form><div id="rb-output" class="result-box hidden" role="status"></div><details class="rb-history"><summary>Последние запуски</summary><div id="rb-history"></div></details>
         </div>
       </div>
       <div class="card">
@@ -380,7 +381,7 @@
             <button class="mini-btn" title="Печать топологии (светлая схема)" onclick="UI.printMap()"><svg class="ic sm"><use href="#i-doc"/></svg>Печать</button>
           </span>
         </div>
-        <div id="infra-map" class="result-box" style="min-height:220px;display:flex;justify-content:center"></div>
+        <div class="topology-tools"><input id="topology-search" class="inp" type="search" aria-label="Поиск на топологии" placeholder="Имя, IP или производитель" oninput="Topology.render(Topology.data)"><select id="topology-filter" class="inp" aria-label="Состояние устройств на топологии" onchange="Topology.render(Topology.data)"><option value="all">Все устройства</option><option value="online">В сети</option><option value="offline">Нет связи</option><option value="unknown">Не проверено</option></select><button class="btn ghost" onclick="Topology.scale(-.25)" aria-label="Уменьшить топологию">−</button><span id="topology-scale">100%</span><button class="btn ghost" onclick="Topology.scale(.25)" aria-label="Увеличить топологию">+</button><button class="btn ghost" onclick="Topology.reset()">Сбросить масштаб</button></div><p id="topology-summary" class="sa-note"></p><div id="infra-map" class="topology-viewport"></div><div id="topology-detail" class="topology-detail" hidden></div>
       </div>
       <div class="card">
         <div class="card-title">Пользовательские проверки <span class="hint">custom_checks/*.py</span>
@@ -507,49 +508,17 @@
 
     <!-- ============ SYSADMIN ============ -->
     <section class="view" id="view-sysadmin">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">SLA-доступность узлов за 30 дней
-            <button class="mini-btn right" onclick="UI.refreshSla()">Обновить</button></div>
-          <div id="sla-box" class="muted">загрузка…</div>
-        </div>
-        <div class="card">
-          <div class="card-title">Прогноз ОЗУ мастера
-            <button class="mini-btn right" onclick="UI.refreshRam()">Обновить</button></div>
-          <div id="ram-box" class="muted">загрузка…</div>
-        </div>
-        <div class="card">
-          <div class="card-title">L2-порты (MAC → порт коммутатора)
-            <button class="mini-btn right" onclick="UI.refreshL2()">Опрос</button></div>
-          <div id="l2-box" class="muted">загрузка…</div>
-        </div>
-        <div class="card">
-          <div class="card-title">Гео-карта атак
-            <button class="mini-btn right" onclick="UI.refreshGeo()">Обновить</button></div>
-          <div id="geo-box" class="muted">загрузка…</div>
-        </div>
-        <div class="card wide">
-          <div class="card-title">Proxmox VE
-            <button class="mini-btn right" onclick="UI.refreshProxmox()">Опрос</button>
-            <span id="pxm-ts" class="muted right"></span></div>
-          <div id="pxm-box" class="muted">загрузка…</div>
-        </div>
-        <div class="card">
-          <div class="card-title">MTR-история (24 ч)
-            <button class="mini-btn right" onclick="UI.refreshMtrHist()">Обновить</button></div>
-          <div id="mtrhist-box" class="muted">загрузка…</div>
-        </div>
-        <div class="card">
-          <div class="card-title">CVE-проверка ПО
-            <button class="mini-btn right" onclick="UI.runCve()">Проверить</button></div>
-          <div id="cve-box" class="muted">загрузка…</div>
-        </div>
-        <div class="card wide">
-          <div class="card-title">Лента изменений (audit)</div>
-          <div id="audit-box" class="muted">загрузка…</div>
-        </div>
-      </div>
-    </section>
+<div class="sa-jump" aria-label="Блоки сисадмина"><button class="btn ghost" onclick="document.getElementById('sa-card-sla').scrollIntoView({block:'start'})">Доступность узлов</button><button class="btn ghost" onclick="document.getElementById('sa-card-ram').scrollIntoView({block:'start'})">Тренд использования ОЗУ</button><button class="btn ghost" onclick="document.getElementById('sa-card-geo').scrollIntoView({block:'start'})">География упоминаний IP</button><button class="btn ghost" onclick="document.getElementById('sa-card-pxm').scrollIntoView({block:'start'})">Proxmox VE</button><button class="btn ghost" onclick="document.getElementById('sa-card-mtrhist').scrollIntoView({block:'start'})">История MTR</button><button class="btn ghost" onclick="document.getElementById('sa-card-cve').scrollIntoView({block:'start'})">Проверка ПО по NVD</button><button class="btn ghost" onclick="document.getElementById('sa-card-l2').scrollIntoView({block:'start'})">L2-порты</button><button class="btn ghost" onclick="document.getElementById('sa-card-audit').scrollIntoView({block:'start'})">Лента изменений</button></div>
+<div class="grid-2">
+<div class="card sa-card wide" id="sa-card-sla"><div class="sa-card-head"><div><div class="workspace-eyebrow">SLA / покрытие наблюдений</div><h3>Доступность узлов</h3></div><div class="sa-controls"><select id="sa-sla-days" class="inp" aria-label="Период доступности" onchange="Sysadmin.sla()"><option value="1">1 день</option><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="90">90 дней</option></select><button class="btn ghost" data-refresh onclick="UI.refreshSla()" aria-label="Обновить: Доступность узлов">Обновить снимок</button></div></div><p class="sa-state" role="status">Ожидаем данные</p><div id="sla-box" aria-busy="false"></div></div>
+<div class="card sa-card " id="sa-card-ram"><div class="sa-card-head"><div><div class="workspace-eyebrow">Ресурсы мастера</div><h3>Тренд использования ОЗУ</h3></div><div class="sa-controls"><button class="btn ghost" data-refresh onclick="UI.refreshRam()" aria-label="Обновить: Тренд использования ОЗУ">Обновить снимок</button></div></div><p class="sa-state" role="status">Ожидаем данные</p><div id="ram-box" aria-busy="false"></div></div>
+<div class="card sa-card " id="sa-card-geo"><div class="sa-card-head"><div><div class="workspace-eyebrow">События безопасности</div><h3>География упоминаний IP</h3></div><div class="sa-controls"><button class="btn ghost" data-refresh onclick="UI.refreshGeo()" aria-label="Обновить: География упоминаний IP">Обновить снимок</button></div></div><p class="sa-state" role="status">Ожидаем данные</p><div id="geo-box" aria-busy="false"></div></div>
+<div class="card sa-card wide" id="sa-card-pxm"><div class="sa-card-head"><div><div class="workspace-eyebrow">Узлы и виртуальные машины</div><h3>Proxmox VE</h3></div><div class="sa-controls"><button id="sa-pxm-poll" class="btn accent" onclick="Sysadmin.run('pxm')" disabled>Опросить PVE</button><button class="btn ghost" data-refresh onclick="UI.refreshProxmox()" aria-label="Обновить: Proxmox VE">Обновить снимок</button></div></div><p class="sa-state" role="status">Ожидаем данные</p><div id="pxm-box" aria-busy="false"></div></div>
+<div class="card sa-card wide" id="sa-card-mtrhist"><div class="sa-card-head"><div><div class="workspace-eyebrow">Сохранённые измерения хопов</div><h3>История MTR</h3></div><div class="sa-controls"><select id="sa-mtr-hours" class="inp" aria-label="Период истории MTR" onchange="Sysadmin.mtr()"><option value="1">1 час</option><option value="24" selected>24 часа</option><option value="168">7 дней</option></select><button class="btn ghost" data-refresh onclick="UI.refreshMtrHist()" aria-label="Обновить: История MTR">Обновить снимок</button></div></div><p class="sa-state" role="status">Ожидаем данные</p><div id="mtrhist-box" aria-busy="false"></div></div>
+<div class="card sa-card wide" id="sa-card-cve"><div class="sa-card-head"><div><div class="workspace-eyebrow">Кандидаты CVE, требующие проверки</div><h3>Проверка ПО по NVD</h3></div><div class="sa-controls"><button id="sa-cve-run" class="btn accent" onclick="UI.runCve()" disabled>Проверить ПО</button><button class="btn ghost" data-refresh onclick="UI.refreshCve()" aria-label="Обновить: Проверка ПО по NVD">Обновить снимок</button></div></div><p class="sa-state" role="status">Ожидаем данные</p><div id="cve-box" aria-busy="false"></div></div>
+<div class="card sa-card wide" id="sa-card-l2"><div class="sa-card-head"><div><div class="workspace-eyebrow">Сохранённый снимок MAC → порт</div><h3>L2-порты</h3></div><div class="sa-controls"><button class="btn ghost" data-refresh onclick="UI.refreshL2()" aria-label="Обновить: L2-порты">Обновить снимок</button></div></div><p class="sa-state" role="status">Ожидаем данные</p><div id="l2-box" aria-busy="false"></div></div>
+<div class="card sa-card wide" id="sa-card-audit"><div class="sa-card-head"><div><div class="workspace-eyebrow">Аудит действий пользователей</div><h3>Лента изменений</h3></div><div class="sa-controls"><select id="sa-audit-limit" class="inp" aria-label="Количество записей аудита" onchange="Sysadmin.audit()"><option>100</option><option>250</option><option>500</option></select><button class="btn ghost" data-refresh onclick="UI.refreshAudit()" aria-label="Обновить: Лента изменений">Обновить снимок</button></div></div><p class="sa-state" role="status">Ожидаем данные</p><div id="audit-box" aria-busy="false"></div></div>
+</div></section>
 
     <!-- ============ MESH (P2P) ============ -->
     <section class="view" id="view-mesh">
@@ -736,6 +705,9 @@
 
 <div id="toast-wrap"></div>
 <script src="/workspaces.js"></script>
+<script src="/sysadmin.js"></script>
+<script src="/topology.js"></script>
+<script src="/runbooks.js"></script>
 <script src="/operations.js"></script>
 <script src="/app.js"></script>
   <script>if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));</script>

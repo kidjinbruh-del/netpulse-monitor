@@ -1,6 +1,6 @@
 /* NetPulse: predictable offline shell; never cache private API or exports. */
-const CACHE = 'netpulse-shell-v8';
-const STATIC = ['/', '/style.css', '/app.js', '/workspaces.js', '/operations.js', '/icon.svg', '/manifest.json'];
+const CACHE = 'netpulse-shell-v11';
+const STATIC = ['/', '/style.css', '/app.js', '/workspaces.js', '/sysadmin.js', '/topology.js', '/runbooks.js', '/operations.js', '/icon.svg', '/manifest.json'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(STATIC)).then(() => self.skipWaiting()));
 });
