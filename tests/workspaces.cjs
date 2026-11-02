@@ -1,0 +1,94 @@
+/* Real browser checks against the isolated server; no LAN scan or device mutation. */
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const path=require('node:path');
+const base=process.env.NP_TEST_URL||'http://127.0.0.1:8796';
+(async()=>{
+ const browser=await chromium.launch({headless:true,...(process.env.NP_BROWSER_CHANNEL?{channel:process.env.NP_BROWSER_CHANNEL}:{})});
+ try {
+ const context=await browser.newContext({viewport:{width:1440,height:1000},deviceScaleFactor:2,acceptDownloads:true});
+ const page=await context.newPage(),errors=[],posts=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ page.on('request',r=>{if(r.method()==='POST')posts.push(new URL(r.url()).pathname);});
+ const devices=[{ip:'192.0.2.10',mac:'00:11:22:33:44:10',hostname:'Printer',vendor:'D-Link',alias:'=SUM(1,2)'},{ip:'192.0.2.2',mac:'00:11:22:33:44:02',hostname:'Office PC',vendor:'MikroTik',alias:'Helpdesk'}];
+ await page.route('**/api/landevices?*',r=>r.fulfill({json:{interfaces:[{id:'lab',name:'Fixture',subnet:'192.0.2.0/24'}],selected_interface:'lab',subnet:'192.0.2.0/24',self_name:'Fixture',self_ip:'192.0.2.1',devices}}));
+ await page.route('**/api/dbhistory?*',r=>r.fulfill({json:{buckets:[{kbps:10,ping:15,jitter:2,loss:0},{kbps:null,ping:null,jitter:null,loss:null},{kbps:20,ping:30,jitter:4,loss:1}]}}));
+ await page.route('**/api/alerts?*',r=>r.fulfill({json:{alerts:[{alert_type:'WARN',message:'New fixture event',acknowledged:false,timestamp:'2026-11-02T01:00:00'},{alert_type:'INFO',message:'Read fixture event',acknowledged:true,timestamp:'2026-11-02T00:00:00'}]}}));
+ await page.goto(base+'/#lan');
+ await page.locator('#login-token').fill('ci-admin'); await page.getByRole('button',{name:'Войти',exact:true}).click();
+ await page.locator('#view-lan .workspace-head').waitFor();
+ await page.waitForFunction(()=>document.querySelectorAll('#lan-table tbody tr').length===2);
+ const views=await page.locator('.nav-btn').evaluateAll(bs=>bs.map(b=>b.dataset.view));
+ for(const view of views){
+   await page.evaluate(view=>UI.switchView(view),view);
+   assert(await page.locator('#view-'+view+' .workspace-head').isVisible(),view);
+   assert.equal(await page.locator('.nav-btn[aria-current=page]').getAttribute('data-view'),view);
+ }
+ assert(!posts.some(p=>/scan|mtrstart|speedtest|fwblock|aitrain/.test(p)),'Opening views must not launch active operations');
+ await page.evaluate(()=>UI.switchView('lan'));
+ const search=page.locator('#view-lan .table-tools input');
+ await search.fill('printer');
+ await page.waitForFunction(()=>[...document.querySelectorAll('#lan-table tbody tr')].filter(r=>!r.hidden).length===1);
+ await page.evaluate(()=>UI.lanDevices());
+ assert.equal(await search.inputValue(),'printer');
+ assert.equal(await page.locator('#lan-table tbody tr:not([hidden])').count(),1);
+ await search.fill('missing-device'); assert(await page.locator('#view-lan .table-no-match').isVisible());
+ await page.getByRole('button',{name:'Сбросить',exact:true}).filter({visible:true}).click();
+ await page.locator('#lan-table th').first().getByRole('button').click();
+ assert((await page.locator('#lan-table tbody tr').first().innerText()).startsWith('192.0.2.2'));
+ const downloaded=page.waitForEvent('download'); await page.locator('#view-lan .table-tools').getByRole('button',{name:/Экспорт CSV/}).click();
+ const download=await downloaded;const csv=await fs.readFile(await download.path(),'utf8');assert(csv.includes("'=SUM(1,2)"),'CSV formula is neutralized');
+ await page.evaluate(()=>UI.switchView('alerts'));
+ await page.waitForFunction(()=>document.querySelectorAll('#alerts-feed .feed-item').length===2);
+ await page.locator('#alerts-filter').selectOption('unread');
+ assert.equal(await page.locator('#alerts-feed .feed-item:not([hidden])').count(),1);
+ await page.locator('#alerts-search').fill('read fixture');
+ assert(await page.locator('#alerts-empty').isVisible());
+ await page.evaluate(()=>UI.switchView('history')); await page.waitForTimeout(200);
+ const height=await page.locator('#chart-hist-latency').getAttribute('height');
+ await page.evaluate(async()=>{await UI.loadHistory();await UI.loadHistory();});
+ assert.equal(await page.locator('#chart-hist-latency').getAttribute('height'),height,'DPR redraw height is stable');
+ assert.equal(await page.locator('#view-history canvas').count(),4);
+ await page.evaluate(()=>UI.switchView('settings')); await page.waitForTimeout(300);
+ await page.locator('#set-ping-target').fill('192.0.2.99');
+ assert(await page.locator('.settings-dirty').isVisible());
+ await page.evaluate(()=>{UI.switchView('journal');UI.switchView('settings');});
+ assert.equal(await page.locator('#set-ping-target').inputValue(),'192.0.2.99');
+ await page.evaluate(()=>Workspaces.settingsSaved());
+ await page.route('**/api/landevices?*',r=>r.fulfill({status:503,json:{error:'Fixture unavailable'}}));
+ await page.evaluate(()=>UI.switchView('lan')); await page.waitForTimeout(200);
+ assert.equal(await page.locator('#view-lan .workspace-status').getAttribute('data-state'),'error');
+ assert((await page.locator('#view-lan .workspace-status').innerText()).includes('устаревшими'));
+ await page.locator('#nav-search').fill('DNS');
+ assert.equal(await page.locator('.nav-btn:not([hidden])').count(),1);
+ await page.locator('#nav-search').press('Enter');
+ assert.equal(await page.locator('.nav-btn[aria-current=page]').getAttribute('data-view'),'diag');
+ await page.locator('#nav-search').fill('');
+ await page.route('**/api/p2pstatus',r=>r.fulfill({json:{ok:true,enabled:false,connected:false}}));
+ let meshQueries=0;
+ await page.route('**/api/p2pnodes',r=>{meshQueries++;return r.fulfill({status:503,json:{code:'mesh_disabled',error:'disabled'}});});
+ await page.evaluate(()=>UI.switchView('mesh')); await page.waitForTimeout(200);
+ assert.equal(meshQueries,0,'Disabled module must not query nodes');
+ assert((await page.locator('#mesh-status').innerText()).includes('отключён'));
+ assert(await page.locator('#view-mesh button[onclick="UI.rpcCall()"]' ).isDisabled());
+ await page.locator('#view-mesh .workspace-refresh').click(); await page.waitForTimeout(100);
+ assert.equal(meshQueries,0);
+ await fs.mkdir('test-results/workspaces',{recursive:true});
+ await page.screenshot({path:'test-results/workspaces/desktop.png',fullPage:true});
+ await page.setViewportSize({width:390,height:844});
+ const overflow=[];
+ for(const view of views){await page.evaluate(view=>UI.switchView(view),view);await page.waitForTimeout(50);if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2))overflow.push(view);}
+ assert.deepEqual(overflow,[],'No page-wide horizontal overflow on mobile');
+ await page.evaluate(()=>UI.switchView('lan'));
+ await page.getByRole('button',{name:'Открыть меню',exact:true}).click();
+ assert.equal(await page.locator('.burger').getAttribute('aria-expanded'),'true');
+ await page.keyboard.press('Escape');assert.equal(await page.locator('.burger').getAttribute('aria-expanded'),'false');
+ await page.screenshot({path:'test-results/workspaces/mobile.png',fullPage:true});
+ assert.deepEqual(errors,[]);
+ await fs.writeFile('test-results/workspaces/report.json',JSON.stringify({ok:true,views,checks:['navigation','no_automatic_scans','persistent_table_filter','natural_sort','safe_csv','alert_filters','DPR_redraw','settings_drafts','visible_HTTP_failure','mobile_layout','menu_keyboard'],scope:'Isolated server; synthetic table/history/alert responses'},null,2));
+ console.log('Workspace browser checks passed: '+views.length+' views, desktop/mobile, tables, alerts, settings, failures, charts');
+ await context.close();
+ }finally{await browser.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});
+

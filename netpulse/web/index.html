@@ -9,9 +9,15 @@
     <link rel="manifest" href="/manifest.json">
 </head>
 <body>
+<a class="skip-link" href="#main-content">Перейти к содержимому</a>
+<button id="menu-shade" class="menu-shade" aria-label="Закрыть меню" hidden></button>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8M12 16v5"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></symbol>
     <symbol id="i-logo" viewBox="0 0 24 24"><path d="M12 3c4.5 0 8 3.5 8 8 0 5-5.5 9-8 10-2.5-1-8-5-8-10 0-4.5 3.5-8 8-8z"/><circle cx="12" cy="11" r="3"/><path d="M12 14v7"/></symbol>
     <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="5" rx="2"/><rect x="13" y="11" width="8" height="10" rx="2"/><rect x="3" y="15" width="8" height="6" rx="2"/></symbol>
     <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></symbol>
@@ -49,6 +55,7 @@
       <div><div class="logo-name">NETPULSE</div><div class="logo-sub">network operations</div></div>
     </div>
 
+    <div class="nav-search-wrap"><label for="nav-search">Найти раздел <kbd>Ctrl K</kbd></label><input id="nav-search" class="inp" type="search" placeholder="Сеть, устройства, события…" autocomplete="off"></div>
     <nav id="nav">
       <button data-view="dashboard" class="nav-btn active"><svg class="ic"><use href="#i-dash"/></svg>Дашборд</button>
       <button data-view="operations" class="nav-btn"><svg class="ic"><use href="#i-shield"/></svg>Операционный центр</button>
@@ -68,6 +75,7 @@
       <button data-view="sysadmin" class="nav-btn"><svg class="ic"><use href="#i-gear"/></svg>Сисадмин</button>
       <button data-view="settings" class="nav-btn"><svg class="ic"><use href="#i-gear"/></svg>Настройки</button>
     </nav>
+    <p id="nav-empty" class="nav-empty" role="status" hidden>Разделы не найдены</p>
 
     <div class="sidebar-footer">
       <div id="whoami" class="muted" style="padding:0 14px 6px;font-size:12px"></div>
@@ -77,9 +85,9 @@
     </div>
   </aside>
 
-  <main class="main">
+  <main class="main" id="main-content" tabindex="-1">
     <header class="topbar">
-      <button class="burger" aria-label="Открыть меню" onclick="document.getElementById('sidebar').classList.toggle('open')"><span></span><span></span><span></span></button>
+      <button class="burger" aria-label="Открыть меню" aria-controls="sidebar" aria-expanded="false" onclick="Workspaces.menu(!document.getElementById('sidebar').classList.contains('open'))"><span></span><span></span><span></span></button>
       <h1 id="view-title">Дашборд</h1>
       <div class="topbar-right">
         <div class="pill sys-pill" id="sys-pill" title="Процессор и память этой машины">
@@ -406,7 +414,7 @@
           </select>
           <button class="btn accent right" id="capture-toggle" onclick="UI.captureToggle()"><svg class="ic sm"><use href="#i-play"/></svg>Старт</button>
         </div>
-        <div id="capture-status" class="result-box muted">Захват работает только при запуске от администратора (SIO_RCVALL)</div>
+          <div id="capture-status" class="result-box muted">Не запущен. Для raw socket нужны соответствующие права ОС. Доступность захвата проверяется при запуске.</div>
         <div id="capture-stats" class="chips-row hidden"></div>
         <table class="tbl mono" id="capture-table">
           <thead><tr><th>Время</th><th>Протокол</th><th>Источник</th><th>Назначение</th><th>Порты</th><th>Байт</th></tr></thead>
@@ -462,7 +470,7 @@
         <div id="ai-train-status" class="result-box muted">Фоновое дообучение каждые 5 минут</div>
       </div>
       <div class="card"><div class="card-title">Лента аномалий с объяснениями</div>
-        <div id="ai-anomaly-feed" class="feed muted">Пока пусто — это хорошо.</div></div>
+        <div id="ai-anomaly-feed" class="feed muted">Ожидаем данные модели…</div></div>
     </section>
 
     <!-- ============ ALERTS ============ -->
@@ -470,7 +478,9 @@
       <div class="card">
         <div class="card-title">Журнал алертов
           <button class="btn ghost right" onclick="UI.ackAll()"><svg class="ic sm"><use href="#i-check"/></svg>Принять все</button></div>
+        <div class="feed-tools"><input id="alerts-search" type="search" class="inp" aria-label="Поиск алертов" placeholder="Тип или текст уведомления"><select id="alerts-filter" class="inp" aria-label="Состояние алертов"><option value="all">Все уведомления</option><option value="unread">Новые</option><option value="read">Принятые</option></select><span id="alerts-count" class="muted" role="status"></span></div>
         <div id="alerts-feed" class="feed muted">Загрузка…</div>
+        <p id="alerts-empty" class="table-no-match" hidden>Совпадений нет. Измените поиск или состояние уведомлений.</p>
       </div>
     </section>
 
@@ -482,9 +492,16 @@
             <option value="1">1 час</option><option value="6">6 часов</option>
             <option value="24" selected>24 часа</option><option value="168">7 дней</option>
           </select></div>
-        <canvas id="chart-hist" height="220"></canvas>
-        <div class="card-title mt18">Джиттер и потери</div>
-        <canvas id="chart-hist-ping" height="150"></canvas>
+        <p id="history-summary" class="history-caption" role="status"></p>
+        <div id="history-empty" class="history-empty" hidden>История появится после накопления измерений. Можно выбрать более длинный период.</div>
+        <div class="card-title mt18">Трафик · KB/s</div>
+        <canvas id="chart-hist" height="200" role="img" aria-label="История трафика, килобайты в секунду"></canvas>
+        <div class="card-title mt18">Задержка · ms</div>
+        <canvas id="chart-hist-latency" height="150" role="img" aria-label="История задержки, миллисекунды"></canvas>
+        <div class="card-title mt18">Джиттер · ms</div>
+        <canvas id="chart-hist-ping" height="150" role="img" aria-label="История джиттера, миллисекунды"></canvas>
+        <div class="card-title mt18">Потери · %</div>
+        <canvas id="chart-hist-loss" height="150" role="img" aria-label="История потерь, проценты"></canvas>
       </div>
     </section>
 
@@ -718,6 +735,7 @@
 </div>
 
 <div id="toast-wrap"></div>
+<script src="/workspaces.js"></script>
 <script src="/operations.js"></script>
 <script src="/app.js"></script>
   <script>if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));</script>

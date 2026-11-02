@@ -454,6 +454,18 @@ class Api:
 
     # ----- P2P mesh (мост в решётку) -----
 
+    def _mesh_unavailable(self):
+        mesh = getattr(self, "mesh", None)
+        if mesh is None:
+            code, message = "mesh_not_configured", "P2P-мост не создан"
+        elif not mesh.enabled:
+            code, message = "mesh_disabled", "P2P-модуль отключён в конфигурации"
+        elif not mesh.connected:
+            code, message = "mesh_disconnected", "Нет соединения с P2P-узлом. Проверьте адрес, порт и запуск ядра решётки"
+        else:
+            return None
+        return (503, {"ok": False, "code": code, "error": message})
+
     def p2p_status(self, q):
         mesh = getattr(self, "mesh", None)
         if mesh is None:
@@ -461,6 +473,8 @@ class Api:
         return {"ok": True, **mesh.status}
 
     def p2p_nodes(self, q):
+        if unavailable := self._mesh_unavailable():
+            return unavailable
         mesh = getattr(self, "mesh", None)
         if mesh is None:
             return (503, {"ok": False, "error": "P2P-мост не создан"})
@@ -490,6 +504,8 @@ class Api:
         return {"ok": True, **st}
 
     def p2p_services(self, q):
+        if unavailable := self._mesh_unavailable():
+            return unavailable
         mesh = getattr(self, "mesh", None)
         if mesh is None:
             return (503, {"ok": False, "error": "P2P-мост не создан"})
@@ -521,6 +537,8 @@ class Api:
 
     def p2p_metrics(self, q):
         """Тёплая карта меша: CPU/RAM всех нод + история для таймлайна."""
+        if unavailable := self._mesh_unavailable():
+            return unavailable
         mesh = getattr(self, "mesh", None)
         if mesh is None:
             return (503, {"ok": False, "error": "P2P-мост не создан"})
@@ -531,25 +549,12 @@ class Api:
             node_ids = [own] + [n.get("node_id") for n in (nt.get("connected") or [])
                                 if n.get("node_id") and n.get("node_id") != own]
         except MeshError:
-            own = mesh.target
-            node_ids = [own]
+            return (502, {"ok": False, "code": "mesh_topology_failed",
+                          "error": "Не удалось получить список P2P-узлов. Повторите после восстановления связи"})
         rows = {}
         errors = {}
         with ThreadPoolExecutor(max_workers=8) as pool:
             def probe(nid):
-                if nid == own:
-                    vm = psutil.virtual_memory()
-                    return (nid, {
-                        "node_id": nid, "host": "localhost",
-                        "port": self.cfg.get("web_port") or self.cfg.get("port") or 0,
-                        "cpu": psutil.cpu_percent(interval=0.2),
-                        "cpu_count": psutil.cpu_count(),
-                        "mem_pct": round(vm.percent, 1),
-                        "mem_used_gb": round(vm.used / 1073741824, 2),
-                        "mem_total_gb": round(vm.total / 1073741824, 2),
-                        "uptime_sec": int(time.time() - psutil.boot_time()),
-                        "ts": int(time.time()),
-                    })
                 try:
                     return (nid, mesh.call("netinfo", "metrics", {}, dst=nid, timeout=6))
                 except MeshError as e:
@@ -574,6 +579,8 @@ class Api:
                 "history": history}
 
     def p2p_call(self, q):
+        if unavailable := self._mesh_unavailable():
+            return unavailable
         body = getattr(self, "_cached_body", None) or {}
         mesh = getattr(self, "mesh", None)
         if mesh is None:

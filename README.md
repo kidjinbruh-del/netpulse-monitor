@@ -1,12 +1,14 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-2.7.1-blue)
+![Version](https://img.shields.io/badge/version-2.8.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
 ![Tests](https://github.com/kidjinbruh-del/netpulse-monitor/actions/workflows/tests.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 Linux Mint 22.x: `bash install_mint.sh` — [установка и запуск](docs/LINUX-MINT.md).
+
+Версия 2.8: [рабочие разделы, таблицы, состояния данных и P2P](docs/WORKSPACES.md).
 
 Версия 2.7: [Linux и изолированный стенд](docs/LINUX.md), [запуск с рабочего стола](docs/DESKTOP-LAUNCHER.md).
 

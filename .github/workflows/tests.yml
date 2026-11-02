@@ -22,6 +22,7 @@ jobs:
       - run: node --check netpulse/web/app.js
       - run: node --check netpulse/web/sw.js
       - run: node --check netpulse/web/operations.js
+      - run: node --check netpulse/web/workspaces.js
       - run: node tests/frontend.cjs
 
   prometheus-config:
@@ -101,12 +102,13 @@ jobs:
         run: >-
           python -c "from tests.monitoring_smoke import eventually, request; eventually(lambda: request('http://127.0.0.1:8770/healthz'))"
       - run: npx playwright test tests/operations.spec.cjs --workers=1 --reporter=line
+      - run: NP_TEST_URL=http://127.0.0.1:8770 node tests/workspaces.cjs
       - run: python tests/monitoring_smoke.py
       - name: Fixture diagnostics
         if: always()
         run: cat /tmp/netpulse-fixture.log
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
           name: browser-results
           path: test-results/

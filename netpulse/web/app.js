@@ -44,11 +44,22 @@ async function timedFetch(url, options = {}) {
   } finally { clearTimeout(timer); }
 }
 
-async function apiGet(path) {
+async function apiGet(path, trackWorkspace = true) {
+  const ticket = trackWorkspace ? window.Workspaces?.begin(path) : null;
+  let failure;
+  try {
   const r = await timedFetch("/api/" + path + Auth.suffix(path), { headers: { "X-Auth": Auth.get() } });
   if (r.status === 401) throw new UnauthorizedError();
-  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
-  return r.json();
+  if (!r.ok) throw await apiFailure(r, path);
+  return await r.json();
+  } catch (error) {
+    failure = error;
+    if (error instanceof UnauthorizedError) {
+      error.message = "Требуется вход";
+      window.UI?.showLogin();
+    }
+    throw error;
+  } finally { window.Workspaces?.finish(ticket, failure); }
 }
 async function apiPost(path, body = {}) {
   const r = await timedFetch("/api/" + path + Auth.suffix(path), {
@@ -57,10 +68,32 @@ async function apiPost(path, body = {}) {
     body: JSON.stringify(body),
   });
   if (r.status === 401) throw new UnauthorizedError();
-  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  if (!r.ok) throw await apiFailure(r, path);
   return r.json();
 }
 class UnauthorizedError extends Error {}
+async function apiFailure(response, path) {
+  let payload = {}; try { payload = await response.json(); } catch (_) {}
+  const descriptions = {
+    400: "Проверьте параметры запроса", 403: "Недостаточно прав для этого действия",
+    404: "Источник данных или функция недоступны в этой версии сервера",
+    409: "Действие конфликтует с текущим состоянием. Дождитесь завершения задачи",
+    429: "Слишком много запросов. Повторите позднее",
+    500: "Сервер не смог обработать запрос. Подробности записаны в журнале NetPulse",
+    502: "Подключённый сервис не ответил корректно. Проверьте его состояние",
+    503: "Модуль отключён, не настроен или временно недоступен",
+  };
+  const meshReasons = {
+    mesh_disabled:"P2P-модуль отключён в конфигурации",
+    mesh_not_configured:"P2P-мост не создан",
+    mesh_disconnected:"Нет соединения с P2P-узлом. Проверьте адрес, порт и запуск ядра решётки",
+    mesh_topology_failed:"Не удалось получить список P2P-узлов. Повторите после восстановления связи",
+  };
+  const detail = [400,409].includes(response.status) && typeof payload.error === 'string'
+    ? payload.error.slice(0,240).replace(/(password|token|secret|authorization)\s*[:=]\s*\S+/gi,'$1=[скрыто]') : '';
+  const error = new Error(`${meshReasons[payload.code] || descriptions[response.status] || 'Запрос не выполнен'}${detail ? ': '+detail : ''} (${path.split('?')[0]}, HTTP ${response.status})`);
+  error.status=response.status; error.code=payload.code || ''; error.endpoint=path.split('?')[0]; return error;
+}
 
 function toast(msg, isError = false) {
   const el = document.createElement("div");
@@ -99,7 +132,7 @@ function cssVar(name) {
 function prepCanvas(cv) {
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || cv.parentElement.clientWidth || 600;
-  const h = parseInt(cv.getAttribute("height")) || 160;
+  const h = Number(cv.dataset.logicalHeight || (cv.dataset.logicalHeight = parseInt(cv.getAttribute("height")) || 160));
   if (cv.width !== w * dpr || cv.height !== h * dpr) {
     cv.width = w * dpr; cv.height = h * dpr;
     cv.style.height = h + "px";
@@ -182,14 +215,17 @@ function drawHistChart(cvId, seriesList) {
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h, 4);
   const colors = ["--cyan", "--violet"];
+  const max = Math.max(...seriesList.flatMap(s => s.values.filter(v => v != null && Number.isFinite(+v))), 1) * 1.15;
   seriesList.forEach((s, idx) => {
     if (!s.values.length) return;
     const step = w / Math.max(s.values.length - 1, 1);
-    const max = Math.max(...s.values, 1) * 1.15;
     ctx.beginPath();
+    let connected = false;
     s.values.forEach((v, i) => {
+      if (v == null || !Number.isFinite(+v)) { connected = false; return; }
       const x = i * step, y = h - (v / max) * h * 0.9;
-      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      connected ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      connected = true;
     });
     ctx.strokeStyle = cssVar(colors[idx]); ctx.lineWidth = 2; ctx.stroke();
   });
@@ -254,6 +290,7 @@ const UI = {
   captureOn: false,
 
   init() {
+    window.Workspaces?.init(this);
     document.querySelectorAll(".nav-btn").forEach(b =>
       b.addEventListener("click", () => this.switchView(b.dataset.view)));
     $("theme-toggle").addEventListener("change", e => {
@@ -315,6 +352,7 @@ const UI = {
       v.classList.toggle("active", v.id === "view-" + view));
     $("view-title").textContent = VIEW_TITLES[view] || view;
     $("sidebar").classList.remove("open");
+    window.Workspaces?.show(view);
 
     if (view === "traffic") { this.refreshInterfaces(); this.refreshConns(); }
     if (view === "lan") this.lanDevices();
@@ -323,7 +361,7 @@ const UI = {
     if (view === "ai") this.loadAI();
     if (view === "alerts") this.loadAlerts();
     if (view === "history") this.loadHistory();
-    if (view === "settings") this.loadSettings();
+    if (view === "settings" && !window.Workspaces?.dirtySettings) this.loadSettings();
     if (view === "operations") Ops.load();
     if (view === "journal") this.loadJournal();
     if (view === "park") this.loadPark();
@@ -798,7 +836,7 @@ const UI = {
         <td class="muted">${esc((map[d.mac]?.first_seen || "—").slice(0, 16).replace("T", " "))}</td>
         <td class="muted">${esc(d.is_me ? 'это этот ПК' : d.online===true ? 'отвечает на ping' : d.source==='arp' ? 'ARP-кэш: доступность не подтверждена' : (map[d.mac]?.last_seen || '—').slice(0,16).replace('T',' '))}</td>
         <td><button class="mini-btn" title="Скан портов устройства"
-          onclick="document.getElementById('pscan-host').value='${esc(d.ip)}';UI.portScan()">
+          onclick="UI.switchView('security');document.getElementById('pscan-host').value='${esc(d.ip)}';document.getElementById('pscan-result').scrollIntoView({block:'center'});UI.portScan()">
           <svg class="ic sm"><use href="#i-search"/></svg></button></td>
       </tr>`).join("") || '<tr><td colspan=8 class=muted>устройств не найдено</td></tr>';
   },
@@ -1011,7 +1049,7 @@ const UI = {
             <time class="time-stamp">${esc(String(a.timestamp).slice(11, 19))}</time></div>
           <div class="fi-body mono">${Object.entries(f).map(([k, v]) =>
             `${k}: ${fmtNum(v)}`).join(" · ")}</div></div>`;
-      }).join("") : "";
+      }).join("") : "Аномалии не зарегистрированы. Проверьте состояние модели и объём накопленной истории.";
     } catch (e) { void e; }
   },
   async aiTrain() {
@@ -1039,6 +1077,7 @@ const UI = {
             <time class="time-stamp">${esc(String(a.timestamp).slice(5, 19).replace("T", " "))}</time></div>
           <div class="fi-body">${esc(a.message || "")}</div></div>`;
       }).join("") : "Алертов пока нет";
+      window.Workspaces?.filterAlerts();
     } catch (e) { void e; }
   },
   async ackAll() {
@@ -1055,14 +1094,16 @@ const UI = {
     try {
       const d = await apiGet(`dbhistory?hours=${hours}`);
       const buckets = d.buckets;
+      $("history-empty").hidden = buckets.length > 0;
+      $("history-summary").textContent = buckets.length ? `Период: ${hours} ч · отсчётов: ${buckets.length}. Пропуски измерений не соединяются линией.` : "Нет сохранённых измерений за выбранный период.";
       drawHistChart("chart-hist", [
         { values: buckets.map(b => b.kbps) },
-        { values: buckets.map(b => b.ping) },
       ]);
+      drawHistChart("chart-hist-latency", [{ values: buckets.map(b => b.ping) }]);
       drawHistChart("chart-hist-ping", [
         { values: buckets.map(b => b.jitter) },
-        { values: buckets.map(b => b.loss) },
       ]);
+      drawHistChart("chart-hist-loss", [{ values: buckets.map(b => b.loss) }]);
     } catch (e) { toast(String(e), true); }
   },
 
@@ -1662,7 +1703,7 @@ const UI = {
   async loadDashPlatform() {
     try {
       const [h, r] = await Promise.all([
-        apiGet("hosts"), apiGet("journalreport?days=1")]);
+        apiGet("hosts", false), apiGet("journalreport?days=1", false)]);
       const worst = h.hosts.filter(x => x.health_score < 80)
         .sort((a, b) => a.health_score - b.health_score).slice(0, 3);
       let html = "";
@@ -1672,7 +1713,7 @@ const UI = {
           return `${esc(m.name)}: <span style="color:${c};font-weight:600">${m.health_score}</span>`;
         }).join("<br>");
       else
-        html += `<span class="muted">парк здоров</span>`;
+        html += `<span class="muted">${h.hosts.length ? 'Нет зарегистрированных низких оценок' : 'Агенты ещё не прислали данные парка'}</span>`;
       const offline = h.hosts.filter(x => !x.online).length;
       if (offline)
         html += `<br><span style="color:#ff5c74">офлайн: ${offline}</span>`;
@@ -1768,6 +1809,7 @@ const UI = {
       $("settings-status").innerHTML =
         `Сохранено и применено (${new Date().toLocaleTimeString("ru-RU")})${needRestart}`;
       toast("Настройки применены");
+      window.Workspaces?.settingsSaved();
     } catch (e) {
       $("settings-status").textContent = e.message;
     }
@@ -1960,6 +2002,23 @@ const UI = {
     try {
       const st = await apiGet("p2pstatus");
       const box = $("mesh-status");
+      const available = !!st.ok && !!st.enabled && !!st.connected;
+      this.meshAvailable = available;
+      document.querySelectorAll('#view-mesh button, #view-mesh select, #view-mesh input').forEach(control => {
+        if (!control.classList.contains('workspace-refresh') && control.getAttribute('onclick') !== 'UI.loadMesh()') control.disabled = !available;
+      });
+      if (!available) {
+        const explanation = !st.ok ? "P2P-мост не создан. Проверьте конфигурацию p2p."
+          : !st.enabled ? "P2P-модуль отключён в конфигурации. Для работы с решёткой настройте p2p.enabled, адрес и порт узла, затем перезапустите NetPulse."
+          : "Нет соединения с P2P-узлом. Проверьте запуск ядра решётки, адрес, порт и параметры аутентификации. После восстановления нажмите «Обновить данные».";
+        box.textContent = explanation;
+        for (const id of ['mesh-nodes','mesh-heat','mesh-services','mesh-topo-status','mesh-global-soft','mesh-audit','mesh-page','rpc-result']) $(id).textContent = "Данные недоступны: " + (!st.enabled ? "P2P отключён" : "нет соединения с решёткой");
+        $('mesh-nodes-table').querySelector('tbody').innerHTML = '';
+        $('mesh-topo-svg').replaceChildren();
+        $('mesh-node').replaceChildren(); $('rpc-node').replaceChildren();
+        if (this._topoTimer) {clearInterval(this._topoTimer); this._topoTimer = null;}
+        return;
+      }
       if (!st.ok) { box.innerHTML = `<span class='warn'>${esc(st.error || "мост не готов")}</span>`; return; }
       const stDot = st.connected
         ? "<span class='ok-dot'></span><b>соединён</b>"
