@@ -29,14 +29,14 @@ def quoted(value):
     return '"' + str(value).replace('\\','\\\\').replace('"','\\"').replace('`','\\`').replace('$','\\$').replace('%','%%') + '"'
 desktop = ('[Desktop Entry]\nType=Application\nName=NetPulse\nComment=Local network operations dashboard\n'
            'Exec='+quoted(root/'.venv'/'bin'/'python')+' '+quoted(root/'tools'/'launch_netpulse.py')+'\n'
-           'Icon='+str(root/'netpulse'/'web'/'icon.svg')+'\nTerminal=false\nCategories=Network;System;\n')
+           'Icon='+str(root/'netpulse'/'web'/'icon.svg')+'\nTerminal=false\nCategories=Network;\n')
 (applications/'netpulse.desktop').write_text(desktop, encoding='utf-8')
 unit_dir = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home()/'.config'))) / 'systemd' / 'user'
 unit_dir.mkdir(parents=True, exist_ok=True)
 def systemd(value):
     return '"' + str(value).replace('\\','\\\\').replace('"','\\"').replace('%','%%') + '"'
 unit = ('[Unit]\nDescription=NetPulse local monitoring\nAfter=network.target\n\n[Service]\nType=simple\n'
-        'WorkingDirectory='+systemd(root)+'\nExecStart='+systemd(root/'.venv'/'bin'/'python')+' -m netpulse\n'
+        'WorkingDirectory='+str(root).replace('%','%%')+'\nExecStart='+systemd(root/'.venv'/'bin'/'python')+' -m netpulse\n'
         'Environment=NETPULSE_NO_BROWSER=1\nRestart=on-failure\nRestartSec=5\nUMask=0077\n\n[Install]\nWantedBy=default.target\n')
 (unit_dir/'netpulse.service').write_text(unit, encoding='utf-8')
 print('Installed:', applications/'netpulse.desktop')
