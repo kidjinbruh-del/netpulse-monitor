@@ -132,6 +132,8 @@ class RestClient:
             if len(raw) > MAX_BYTES:
                 raise RouterError('Router response exceeds 2 MiB')
             rows = json.loads(raw)
+            if isinstance(rows, dict):  # singleton resources, e.g. system/resource
+                rows = [rows]
             if not isinstance(rows, list) or len(rows) > MAX_ROWS or any(not isinstance(row, dict) for row in rows):
                 raise RouterError('Invalid router response or too many interfaces')
             return rows

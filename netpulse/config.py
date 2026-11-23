@@ -158,7 +158,7 @@ DEFAULTS = {
         "enabled": False,
         "host": "",
         "port": 8006,
-        "verify_tls": True,
+        "verify_tls": False,
         "token_id": "",
         "token_secret": ""
     },
@@ -234,6 +234,64 @@ def _validate(cfg):
     return cfg
 
 
+ENV_FILE_ENV = "NETPULSE_ENV_FILE"
+
+
+def env_file_paths(path=CONFIG_FILE):
+    """Файлы окружения в том же порядке, что и у лаунчера.
+
+    Явный ``NETPULSE_ENV_FILE`` (удобно для служб и тестов), затем ``.env``
+    рядом с конфигом, затем пользовательский
+    ``~/.config/netpulse/netpulse.env``. Отсутствующие файлы пропускаются.
+    """
+    candidates = []
+    explicit = os.environ.get(ENV_FILE_ENV)
+    if explicit:
+        candidates.append(explicit)
+    candidates.append(os.path.join(os.path.dirname(path) or ".", ".env"))
+    candidates.append(os.path.join(os.path.expanduser("~"), ".config",
+                                    "netpulse", "netpulse.env"))
+    return candidates
+
+
+def load_env_files(path=CONFIG_FILE):
+    """Загрузить ``KEY=VALUE`` в ``os.environ``, не перетирая заданные.
+
+    Лаунчер читает ``netpulse.env`` через shell, а прямой запуск
+    ``python -m netpulse`` и ``--check`` — нет. Без этого ``--check``
+    не видел, например, ``password_env`` для MikroTik, и исправная
+    установка получала ложный «mikrotik: fail».
+
+    Возвращает список реально прочитанных файлов. Уже существующие
+    переменные окружения имеют приоритет над файлами.
+    """
+    loaded = []
+    for candidate in env_file_paths(path):
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8-sig") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    if line.startswith("export "):
+                        line = line[7:].lstrip()
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    if not key:
+                        continue
+                    value = value.strip()
+                    if (len(value) >= 2 and value[0] == value[-1]
+                            and value[0] in "\"'"):
+                        value = value[1:-1]
+                    os.environ.setdefault(key, value)
+            loaded.append(candidate)
+        except OSError:
+            continue
+    return loaded
+
+
 def _env_overrides(path=CONFIG_FILE):
     """Сбор NETPULSE_* из окружения и .env-файла рядом с конфигом.
     Формат ключей: NETPULSE_WEB_PORT, NETPULSE_EMAIL_SMTP_HOST, ..."""
@@ -272,6 +330,7 @@ def _env_overrides(path=CONFIG_FILE):
 
 
 def load_config(path=CONFIG_FILE):
+    load_env_files(path)   # netpulse.env/.env -> os.environ (пароли, CA и т.п.)
     cfg = copy.deepcopy(DEFAULTS)
     try:
         if os.path.exists(path):

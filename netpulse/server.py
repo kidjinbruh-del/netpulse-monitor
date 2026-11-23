@@ -117,11 +117,6 @@ def _auth_blocked(ip):
     return 0
 
 
-def _dump_auth_state():
-    """Диагностика: вывести текущее состояние auth-блокировок."""
-    logger.warning(f"[AUTH-DIAG] AUTH_BLOCK={dict(AUTH_BLOCK)} AUTH_FAILS={dict(AUTH_FAILS)}")
-
-
 def reset_auth_state():
     """Для тестов: очистить счётчики неудач и блокировки."""
     AUTH_FAILS.clear()
@@ -454,18 +449,6 @@ class Api:
 
     # ----- P2P mesh (мост в решётку) -----
 
-    def _mesh_unavailable(self):
-        mesh = getattr(self, "mesh", None)
-        if mesh is None:
-            code, message = "mesh_not_configured", "P2P-мост не создан"
-        elif not mesh.enabled:
-            code, message = "mesh_disabled", "P2P-модуль отключён в конфигурации"
-        elif not mesh.connected:
-            code, message = "mesh_disconnected", "Нет соединения с P2P-узлом. Проверьте адрес, порт и запуск ядра решётки"
-        else:
-            return None
-        return (503, {"ok": False, "code": code, "error": message})
-
     def p2p_status(self, q):
         mesh = getattr(self, "mesh", None)
         if mesh is None:
@@ -473,8 +456,6 @@ class Api:
         return {"ok": True, **mesh.status}
 
     def p2p_nodes(self, q):
-        if unavailable := self._mesh_unavailable():
-            return unavailable
         mesh = getattr(self, "mesh", None)
         if mesh is None:
             return (503, {"ok": False, "error": "P2P-мост не создан"})
@@ -504,8 +485,6 @@ class Api:
         return {"ok": True, **st}
 
     def p2p_services(self, q):
-        if unavailable := self._mesh_unavailable():
-            return unavailable
         mesh = getattr(self, "mesh", None)
         if mesh is None:
             return (503, {"ok": False, "error": "P2P-мост не создан"})
@@ -537,8 +516,6 @@ class Api:
 
     def p2p_metrics(self, q):
         """Тёплая карта меша: CPU/RAM всех нод + история для таймлайна."""
-        if unavailable := self._mesh_unavailable():
-            return unavailable
         mesh = getattr(self, "mesh", None)
         if mesh is None:
             return (503, {"ok": False, "error": "P2P-мост не создан"})
@@ -549,12 +526,25 @@ class Api:
             node_ids = [own] + [n.get("node_id") for n in (nt.get("connected") or [])
                                 if n.get("node_id") and n.get("node_id") != own]
         except MeshError:
-            return (502, {"ok": False, "code": "mesh_topology_failed",
-                          "error": "Не удалось получить список P2P-узлов. Повторите после восстановления связи"})
+            own = mesh.target
+            node_ids = [own]
         rows = {}
         errors = {}
         with ThreadPoolExecutor(max_workers=8) as pool:
             def probe(nid):
+                if nid == own:
+                    vm = psutil.virtual_memory()
+                    return (nid, {
+                        "node_id": nid, "host": "localhost",
+                        "port": self.cfg.get("web_port") or self.cfg.get("port") or 0,
+                        "cpu": psutil.cpu_percent(interval=0.2),
+                        "cpu_count": psutil.cpu_count(),
+                        "mem_pct": round(vm.percent, 1),
+                        "mem_used_gb": round(vm.used / 1073741824, 2),
+                        "mem_total_gb": round(vm.total / 1073741824, 2),
+                        "uptime_sec": int(time.time() - psutil.boot_time()),
+                        "ts": int(time.time()),
+                    })
                 try:
                     return (nid, mesh.call("netinfo", "metrics", {}, dst=nid, timeout=6))
                 except MeshError as e:
@@ -579,8 +569,6 @@ class Api:
                 "history": history}
 
     def p2p_call(self, q):
-        if unavailable := self._mesh_unavailable():
-            return unavailable
         body = getattr(self, "_cached_body", None) or {}
         mesh = getattr(self, "mesh", None)
         if mesh is None:
@@ -1274,7 +1262,6 @@ class Api:
 
     def runbooks_list(self, q):
         return {"runbooks": self.svc.runbooks.list(),
-                "enabled": bool(self.cfg.get('runbooks',{}).get('enabled',True)),
                 "log": self.svc.runbooks.recent_log(20)}
 
     def runbook_exec(self, q):
@@ -1284,7 +1271,9 @@ class Api:
             else {}
         actor = (getattr(self, "_cached_actor", None)
                  or str(body.get("actor") or "admin"))
-        return {'job': submit_job(lambda: self.svc.runbooks.execute(rb, params, actor))}
+        res = self.svc.runbooks.execute(rb, params, actor)
+        code = 200 if res.get("ok") else 400
+        return (code, res)
 
     def backup_status_list(self, q):
         return {"backups": self.svc.backupwatch.status_list(),
@@ -1465,7 +1454,7 @@ class Api:
         nodes.append({"name": self_name, "ip": self_ip,
                       "alias": aliases_by_ip.get(self_ip, ""),
                       "hostname": hostnames_by_ip.get(self_ip, ""),
-                      "kind": "master", "online": True, "karma": None,
+                      "kind": "master", "online": True, "karma": 100,
                       "sys_name": self_name, "sys_descr": "",
                       "uptime_h": None, "snmp": False, "vendor": "",
                       "os": "", "layer": "pc"})
@@ -1476,7 +1465,7 @@ class Api:
             nodes.append({"name": "шлюз", "ip": gw,
                           "alias": aliases_by_ip.get(gw, ""),
                           "hostname": hostnames_by_ip.get(gw, ""),
-                          "kind": "router", "online": gw_row.get("online"), "karma": gw_row.get("health_score"),
+                          "kind": "router", "online": True, "karma": 100,
                           "sys_name": gw_row.get("sys_name") or "",
                           "sys_descr": gw_row.get("sys_descr") or "",
                           "uptime_h": gw_row.get("uptime_h"),
@@ -1490,13 +1479,13 @@ class Api:
             if not ip or ip in seen_ip:
                 continue
             kind = h.get("dtype") or ("router" if ip == gw else "host")
-            online = h.get("online")
+            online = bool(h.get("online"))
             node = {
                 "name": h["name"], "ip": ip,
                 "alias": aliases_by_ip.get(ip, ""),
                 "hostname": hostnames_by_ip.get(ip, ""),
                 "kind": kind, "online": online,
-                "karma": h.get("health_score"),
+                "karma": h.get("health_score", 100),
                 "sys_name": h.get("sys_name") or "",
                 "sys_descr": h.get("sys_descr") or "",
                 "uptime_h": h.get("uptime_h"),
@@ -1568,31 +1557,15 @@ class Api:
     def cve_status(self, q):
         st = self.svc.cve.status()
         st["enabled"] = bool(self.cfg.get("cve", {}).get("enabled"))
-        st["nvd_key"] = bool(os.environ.get('NP_NVD_API_KEY'))
-        st["last_result"] = getattr(self.svc.cve, 'last_result', None)
         return st
 
     def cve_scan(self, q):
-        if not self.cfg.get('cve', {}).get('enabled'):
-            return (503, {'error': 'CVE-проверка отключена в конфигурации', 'code': 'cve_disabled'})
-        checker = self.svc.cve
-        if not checker._lock.acquire(blocking=False):
-            return (409, {'error': 'CVE-проверка уже выполняется'})
-        def run():
-            try:
-                rows = self.svc.db.execute("SELECT DISTINCT name, version FROM sw_inventory WHERE name IS NOT NULL AND TRIM(name)<>'' AND version IS NOT NULL AND TRIM(version)<>'' LIMIT 100", fetch=True) or []
-                found = checker.check_products([(r['name'],r['version']) for r in rows])
-                result = {'found': found, 'products': len(rows), 'complete': not bool(checker.last_error),
-                          'error': checker.last_error, 'checked_at': datetime.now().isoformat()}
-                checker.last_result = result
-                return result
-            finally:
-                checker._lock.release()
-        try:
-            return {'job': submit_job(run)}
-        except Exception:
-            checker._lock.release()
-            raise
+        rows = self.svc.db.execute(
+            """SELECT name, version FROM sw_inventory
+               LIMIT 100""", fetch=True) or []
+        products = [(r["name"], r["version"]) for r in rows]
+        found = self.svc.cve.check_products(products)
+        return {"found": found, "products": len(products), "status": self.svc.cve.status()}
 
     def operations_state(self, q):
         ops = getattr(self.svc, 'operations', None)
@@ -1661,7 +1634,7 @@ class Api:
         return self.svc.proxmox.status()
 
     def proxmox_poll(self, q):
-        return {'job': submit_job(self.svc.proxmox.poll)}
+        return self.svc.proxmox.poll()
 
     def l2_scan(self, q):
         return self.svc.l2map.scan()
@@ -2436,7 +2409,6 @@ def setup_logging():
 
 
 def run(config):
-    _dump_auth_state()  # диагностика: начальное состояние auth
     service = MonitorService(config)
     backup_mgr = BackupManager(config)
     port = int(config.get("web_port", 8770))

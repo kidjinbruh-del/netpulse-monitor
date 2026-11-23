@@ -378,13 +378,12 @@ class MTREngine:
         targets = list(mcfg.get("targets") or []) or [mcfg.get("target", "8.8.8.8")]
         rotate = int(mcfg.get("rotate_sec", 600) or 600)
         idx = 0
-        while self.running and not self.svc._stop_event.is_set():
+        while not self.svc._stop_event.is_set():
             tgt = targets[idx % len(targets)]
             self.start(target=tgt)
             waited = 0
-            while self.running and waited < rotate:
-                if self.svc._stop_event.wait(10):
-                    return
+            while not self.svc._stop_event.is_set() and waited < rotate:
+                self.svc._stop_event.wait(10)
                 waited += 10
                 if waited % 120 == 0:
                     self.save_snapshot()
@@ -1056,7 +1055,7 @@ class MonitorService:
                         "mem_total_gb": round(vm.total / 1073741824, 2),
                     }
                     if hasattr(self, "_ram_hist"):
-                        self._ram_hist.append((time.monotonic(), round(vm.percent, 1)))
+                        self._ram_hist.append((self._tick, round(vm.percent, 1)))
 
                 if self.cfg.get("ai", {}).get("enabled", True):
                     result = self.ai.process_traffic_data({
@@ -1436,7 +1435,7 @@ class MonitorService:
             logger.debug("mtr_history table: %s", e)
         return self.db.execute(
             """SELECT ts, target, hop, ip, loss_pct, avg_ms FROM mtr_history
-               WHERE datetime(ts) > datetime('now','localtime', ? || ' hours')
+               WHERE ts > datetime('now','localtime', ? || ' hours')
                ORDER BY id ASC""", (f"-{hours}",), fetch=True) or []
 
     def sla_period(self, days=30):
@@ -1451,27 +1450,25 @@ class MonitorService:
             offs = self.db.execute(
                 """SELECT COUNT(*) AS n FROM events
                    WHERE host_id = ? AND kind IN ('OFFLINE','WATCH_OFFLINE')
-                     AND datetime(timestamp) > datetime('now','localtime', ?)""",
+                     AND timestamp > datetime('now','localtime', ?)""",
                 (h["id"], since), fetch=True) or [{}]
             ons = self.db.execute(
                 """SELECT COUNT(*) AS n FROM events
                    WHERE host_id = ? AND kind = 'ONLINE'
-                     AND datetime(timestamp) > datetime('now','localtime', ?)""",
+                     AND timestamp > datetime('now','localtime', ?)""",
                 (h["id"], since), fetch=True) or [{}]
             n_off = (offs[0]["n"] if offs else 0) or 0
             n_on = (ons[0]["n"] if ons else 0) or 0
-            from .sysadmin import availability
-            import time as _time
-            end = _time.time()
-            transitions = self.db.execute(
-                "SELECT timestamp, kind FROM events WHERE host_id=? AND kind IN ('OFFLINE','WATCH_OFFLINE','ONLINE','WATCH_ONLINE') ORDER BY timestamp DESC LIMIT 10000",
-                (h["id"],), fetch=True) or []
-            estimate = availability(transitions, end - days * 86400, end)
-            out.append({"id": h["id"], "name": h["name"], "ip": h["ip"],
-                        "online": bool(h["online"]), "offline_events": n_off,
-                        "online_events": n_on, "first_seen": h["first_seen"],
-                        "last_seen": h["last_seen"], **estimate})
-        return sorted(out, key=lambda x: (x["sla_pct"] is None, x["sla_pct"] or 0))
+            # грубая оценка: downtime = события OFFLINE без подтверждения ONLINE
+            est = 100.0 - min(100.0, n_off * 5 if n_off else 0)
+            out.append({
+                "id": h["id"], "name": h["name"], "ip": h["ip"],
+                "online": bool(h["online"]),
+                "offline_events": n_off, "online_events": n_on,
+                "sla_pct": round(max(0.0, est), 2),
+                "first_seen": h["first_seen"], "last_seen": h["last_seen"],
+            })
+        return sorted(out, key=lambda x: x["sla_pct"])
 
     def geo_attack_map(self, limit=150):
         """Гео-карта атак: агрегация источников из IDS/security-алертов."""
@@ -1492,15 +1489,22 @@ class MonitorService:
         for r in rows:
             for m in re.finditer(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", r["message"]):
                 ips.append(m.group(1))
-        return {"countries": [{"country": name, "n": count} for name, count in top_countries(ips)],
-                "total_ips": len(ips), "uniq": len(set(ips)),
-                "basis": "legacy_offline_prefixes", "approximate": True,
-                "note": "IP извлечены из текста событий: адрес может быть источником или назначением. География приблизительна и не доказывает атаку или её происхождение"}
+        return {"countries": top_countries(ips),
+                "total_ips": len(ips), "uniq": len(set(ips))}
 
     def ram_forecast(self, days_left_cap=30):
         """Прогноз заполнения ОЗУ мастера по истории mem_pct из snapshot'ов."""
-        from .sysadmin import ram_trend
-        return ram_trend(self._ram_history())
+        history = self._ram_history()
+        if len(history) < 3:
+            return {"ok": False, "note": "мало данных (нужно 3+ точек)"}
+        pts = list(history)
+        slope = (pts[-1][1] - pts[0][1]) / max(len(pts) - 1, 1)
+        if slope <= 0:
+            return {"ok": True, "slope_pct_pt": round(slope, 3),
+                    "days_left": None, "note": "ОЗУ не растёт"}
+        days_left = (100.0 - pts[-1][1]) / slope
+        return {"ok": True, "last_pct": pts[-1][1], "slope_pct_pt": round(slope, 3),
+                "days_left": int(days_left) if days_left < days_left_cap else None}
 
     def _ram_history(self):
         # из кольцевого буфера mem_pct (пишется раз в секунду в _tick_loop)

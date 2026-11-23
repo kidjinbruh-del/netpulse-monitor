@@ -1,16 +1,12 @@
 # NetPulse — центр сетевого мониторинга и автоматизации ИТ-отдела
 
-![Version](https://img.shields.io/badge/version-2.8.1-blue)
+![Version](https://img.shields.io/badge/version-2.7.1-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-informational)
 ![Tests](https://github.com/kidjinbruh-del/netpulse-monitor/actions/workflows/tests.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20Windows-lightgrey)
 
 Linux Mint 22.x: `bash install_mint.sh` — [установка и запуск](docs/LINUX-MINT.md).
-
-Версия 2.8: [рабочие разделы, таблицы, состояния данных и P2P](docs/WORKSPACES.md).
-
-Версия 2.8.1: [Сисадмин, топология, runbooks и автозапуск администратора](docs/SYSADMIN.md).
 
 Версия 2.7: [Linux и изолированный стенд](docs/LINUX.md), [запуск с рабочего стола](docs/DESKTOP-LAUNCHER.md).
 
@@ -121,33 +117,46 @@ Prometheus `/metrics` • SSE-стрим живого состояния • а�
 
 ## 3. Быстрый старт
 
-**Требования:** Windows 10/11, Python 3.12+, права администратора (для полного
-функционала).
+**Требования:** Linux Mint 22.x / Ubuntu 24.04 или Windows 10/11, Python 3.12+.
+
+Linux (основной стенд):
 
 ```bash
-pip install psutil                # единственная зависимость веб-версии
-python -m netpulse                # дашборд: http://127.0.0.1:8770
+bash install_mint.sh          # venv, зависимости, ярлык
+bash open_netpulse.sh         # дашборд: http://127.0.0.1:8770
 ```
 
-Десктоп-версия (альтернативный UI, legacy):
+Проверка окружения без запуска и без изменений:
 
 ```bash
+.venv/bin/python -m netpulse --check
+```
+
+Windows:
+
+```powershell
 pip install -r requirements.txt
+python -m netpulse             # дашборд: http://127.0.0.1:8770
+```
+
+Десктоп-версия (альтернативный UI, legacy) требует `customtkinter`:
+
+```bash
 python main.py
 ```
 
-**Автозапуск с правами администратора:**
-
-```powershell
-.\tools\install_autostart.ps1 -StartNow
-```
+**Автозапуск:** Linux — пользовательская служба `netpulse` (см.
+[docs/LINUX-MINT.md](docs/LINUX-MINT.md)); Windows — `start_netpulse.ps1`
+через планировщик задач.
 
 ---
 
 ## 4. Конфигурация (`config.json`)
 
 Создаётся автоматически из значений по умолчанию. Секреты при сохранении
-шифруются через DPAPI (префикс `dpapi:`).
+шифруются через Windows DPAPI (префикс `dpapi:`). На Linux DPAPI недоступен,
+поэтому секреты сохраняются в `config.json` открытым текстом — ограничьте
+права: `chmod 600 config.json`.
 
 | Секция / ключ | Назначение |
 |---|---|
@@ -168,7 +177,7 @@ python main.py
 | `planner` | Плановые работы: `tasks: [{"name": "...", "every_days": 14}]` |
 | `speedtest` | URL и объёмы тестов скорости |
 | `mtr` | Цель, макс. хопов, интервал цикла; `targets` — веер целей, `rotate_sec` — ротация |
-| `telegram` | Уведомления в Telegram (токен шифруется DPAPI) |
+| `telegram` | Уведомления в Telegram (токен шифруется DPAPI на Windows; на Linux — `chmod 600 config.json`) |
 | `backup` | Автобэкап проекта (WinRAR или zip) |
 | `diagnostics` | Цели traceroute и резолвинга |
 | `lan.trusted_macs` | Список доверенных MAC — не поднимают алерт нового устройства |
@@ -277,12 +286,14 @@ python main.py
 ## 8. Тесты
 
 ```bash
-python -m tests.test_core        # ядро: БД, пингер, сниффер, парсеры
-python -m tests.test_netpulse    # веб: сервер, auth, модули платформы
+.venv/bin/python -m pytest -q
+# 180 passed, 1 skipped
 ```
 
-Собственный раннер (без pytest). CI: GitHub Actions прогоняет оба набора
-на каждом пуше (`.github/workflows/tests.yml`).
+CI (`.github/workflows/tests.yml`) прогоняет pytest на Windows и Ubuntu,
+проверяет синтаксис JS/SW, конфиг Prometheus, Linux VM-стенд и
+Playwright-сценарии. `--check` покрыт отдельными регрессиями в
+`tests/test_doctor.py`.
 
 ---
 
@@ -290,34 +301,43 @@ python -m tests.test_netpulse    # веб: сервер, auth, модули пл
 
 ```
 netpulse/            веб-версия (основная)
-  p2p_core/            mesh-сеть узлов (совместно с olegs32/P2P_Core)
   server.py            HTTP-сервер, REST/SSE/Prometheus, firewall, бэкапы
   services.py          MonitorService: трафик, пинг, IDS, MTR, сканер ЛС, SLA, гео, отчёты
+  lan_discovery.py     выбор интерфейса, маски, ARP/соседи, ping
   l2map.py             L2-карта: Bridge-MIB (SNMP-walk), LLDP, PTR
   geo.py               локальный резолвер IP → страна
   cve.py               CVE-проверка через NVD API (кэш sw_cve)
-  proxmox.py           интеграция Proxmox VE (статус нод/ВМ)
+  proxmox.py           интеграция Proxmox VE
+  mikrotik.py          опрос MikroTik (RouterOS 6/7)
+  routeros.py          REST/API-SSL, TLS, разбор таблиц
+  operations.py        площадки, устройства, инциденты, уведомления
+  recovery.py          проверяемые бэкапы и восстановление
+  health.py            readiness-проверки
+  doctor.py            read-only --check
+  notifications.py     очередь доставки уведомлений
   journal.py           журнал работ и отчёты
   inventory.py         парк машин, события, карма
-  watchdog.py          сторож ПК (WinRM), прогноз дисков
+  watchdog.py          сторож ПК (PowerShell/WinRM), прогноз дисков
   infra.py             инфраструктура: SNMP v2c (stdlib), авто-diff конфигов
   runbooks.py          кнопки операций + аудит
   planner.py           плановые работы
   backupwatch.py       контроль бэкапов
-  softwareinv.py       приём GPO-отчётов о ПО
+  softwareinv.py       приём отчётов о ПО (GPO-скрипт)
   wol.py               Wake-on-LAN
-  config.py            конфигурация (глубокое слияние, DPAPI, NETPULSE_* env)
-  web/                 дашборд (index.html, app.js, style.css, sw.js)
-  gpo/                 скрипт инвентаря для GPO
+  mesh.py              мост к P2P-решётке
+  p2p_core/            mesh-сеть узлов (совместно с olegs32/P2P_Core)
+  config.py            конфигурация (слияние, DPAPI, NETPULSE_* env)
+  web/                 дашборд (index.html, app.js, operations.js, style.css, sw.js)
+  gpo/                 PowerShell-скрипт инвентаря
   runbooks/            JSON-сценарии кнопок
 core/                общее ядро: БД (WAL), пингер, сниффер, traceroute, security
 ai/                  агенты аномалий и прогнозов
 ui/                  desktop-интерфейс (legacy)
-tools/               make_cert.ps1, mitm-шаблон для отладки
-tests/               тесты (28)
-docs/screens/        скриншоты дашборда
+tools/               install_linux.sh, launch_netpulse.py, linux_lab.sh
+tests/               pytest: 180 тестов
+deploy/              Zabbix-шаблон, Prometheus/Grafana/Alertmanager
+docs/                Linux, recovery, operations, MikroTik, скриншоты
 _legacy/             архив первой версии
-IDEAS.md             бэклог идей сисадмина
 ```
 
 ---

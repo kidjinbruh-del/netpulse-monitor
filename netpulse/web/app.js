@@ -44,22 +44,11 @@ async function timedFetch(url, options = {}) {
   } finally { clearTimeout(timer); }
 }
 
-async function apiGet(path, trackWorkspace = true) {
-  const ticket = trackWorkspace ? window.Workspaces?.begin(path) : null;
-  let failure;
-  try {
+async function apiGet(path) {
   const r = await timedFetch("/api/" + path + Auth.suffix(path), { headers: { "X-Auth": Auth.get() } });
   if (r.status === 401) throw new UnauthorizedError();
-  if (!r.ok) throw await apiFailure(r, path);
-  return await r.json();
-  } catch (error) {
-    failure = error;
-    if (error instanceof UnauthorizedError) {
-      error.message = "Требуется вход";
-      window.UI?.showLogin();
-    }
-    throw error;
-  } finally { window.Workspaces?.finish(ticket, failure); }
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  return r.json();
 }
 async function apiPost(path, body = {}) {
   const r = await timedFetch("/api/" + path + Auth.suffix(path), {
@@ -68,32 +57,10 @@ async function apiPost(path, body = {}) {
     body: JSON.stringify(body),
   });
   if (r.status === 401) throw new UnauthorizedError();
-  if (!r.ok) throw await apiFailure(r, path);
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
   return r.json();
 }
 class UnauthorizedError extends Error {}
-async function apiFailure(response, path) {
-  let payload = {}; try { payload = await response.json(); } catch (_) {}
-  const descriptions = {
-    400: "Проверьте параметры запроса", 403: "Недостаточно прав для этого действия",
-    404: "Источник данных или функция недоступны в этой версии сервера",
-    409: "Действие конфликтует с текущим состоянием. Дождитесь завершения задачи",
-    429: "Слишком много запросов. Повторите позднее",
-    500: "Сервер не смог обработать запрос. Подробности записаны в журнале NetPulse",
-    502: "Подключённый сервис не ответил корректно. Проверьте его состояние",
-    503: "Модуль отключён, не настроен или временно недоступен",
-  };
-  const meshReasons = {
-    mesh_disabled:"P2P-модуль отключён в конфигурации",
-    mesh_not_configured:"P2P-мост не создан",
-    mesh_disconnected:"Нет соединения с P2P-узлом. Проверьте адрес, порт и запуск ядра решётки",
-    mesh_topology_failed:"Не удалось получить список P2P-узлов. Повторите после восстановления связи",
-  };
-  const detail = [400,409].includes(response.status) && typeof payload.error === 'string'
-    ? payload.error.slice(0,240).replace(/(password|token|secret|authorization)\s*[:=]\s*\S+/gi,'$1=[скрыто]') : '';
-  const error = new Error(`${meshReasons[payload.code] || descriptions[response.status] || 'Запрос не выполнен'}${detail ? ': '+detail : ''} (${path.split('?')[0]}, HTTP ${response.status})`);
-  error.status=response.status; error.code=payload.code || ''; error.endpoint=path.split('?')[0]; return error;
-}
 
 function toast(msg, isError = false) {
   const el = document.createElement("div");
@@ -132,7 +99,7 @@ function cssVar(name) {
 function prepCanvas(cv) {
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || cv.parentElement.clientWidth || 600;
-  const h = Number(cv.dataset.logicalHeight || (cv.dataset.logicalHeight = parseInt(cv.getAttribute("height")) || 160));
+  const h = parseInt(cv.getAttribute("height")) || 160;
   if (cv.width !== w * dpr || cv.height !== h * dpr) {
     cv.width = w * dpr; cv.height = h * dpr;
     cv.style.height = h + "px";
@@ -215,17 +182,14 @@ function drawHistChart(cvId, seriesList) {
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h, 4);
   const colors = ["--cyan", "--violet"];
-  const max = Math.max(...seriesList.flatMap(s => s.values.filter(v => v != null && Number.isFinite(+v))), 1) * 1.15;
   seriesList.forEach((s, idx) => {
     if (!s.values.length) return;
     const step = w / Math.max(s.values.length - 1, 1);
+    const max = Math.max(...s.values, 1) * 1.15;
     ctx.beginPath();
-    let connected = false;
     s.values.forEach((v, i) => {
-      if (v == null || !Number.isFinite(+v)) { connected = false; return; }
       const x = i * step, y = h - (v / max) * h * 0.9;
-      connected ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-      connected = true;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
     });
     ctx.strokeStyle = cssVar(colors[idx]); ctx.lineWidth = 2; ctx.stroke();
   });
@@ -267,6 +231,7 @@ const MESH_SERVICES = {
   test:      { title: "Test",        desc: "тестовый" },
 };
 const MESH_METHODS = {
+  wifi_samples: ["latest"],
   webpanel:  ["node_status", "discover_ui_services"],
   netinfo:   ["neighbors", "nodes", "services", "find_service"],
   certstool: ["get_dashboard_data", "list_certificates",
@@ -290,7 +255,6 @@ const UI = {
   captureOn: false,
 
   init() {
-    window.Workspaces?.init(this);
     document.querySelectorAll(".nav-btn").forEach(b =>
       b.addEventListener("click", () => this.switchView(b.dataset.view)));
     $("theme-toggle").addEventListener("change", e => {
@@ -352,7 +316,6 @@ const UI = {
       v.classList.toggle("active", v.id === "view-" + view));
     $("view-title").textContent = VIEW_TITLES[view] || view;
     $("sidebar").classList.remove("open");
-    window.Workspaces?.show(view);
 
     if (view === "traffic") { this.refreshInterfaces(); this.refreshConns(); }
     if (view === "lan") this.lanDevices();
@@ -361,7 +324,7 @@ const UI = {
     if (view === "ai") this.loadAI();
     if (view === "alerts") this.loadAlerts();
     if (view === "history") this.loadHistory();
-    if (view === "settings" && !window.Workspaces?.dirtySettings) this.loadSettings();
+    if (view === "settings") this.loadSettings();
     if (view === "operations") Ops.load();
     if (view === "journal") this.loadJournal();
     if (view === "park") this.loadPark();
@@ -836,7 +799,7 @@ const UI = {
         <td class="muted">${esc((map[d.mac]?.first_seen || "—").slice(0, 16).replace("T", " "))}</td>
         <td class="muted">${esc(d.is_me ? 'это этот ПК' : d.online===true ? 'отвечает на ping' : d.source==='arp' ? 'ARP-кэш: доступность не подтверждена' : (map[d.mac]?.last_seen || '—').slice(0,16).replace('T',' '))}</td>
         <td><button class="mini-btn" title="Скан портов устройства"
-          onclick="UI.switchView('security');document.getElementById('pscan-host').value='${esc(d.ip)}';document.getElementById('pscan-result').scrollIntoView({block:'center'});UI.portScan()">
+          onclick="document.getElementById('pscan-host').value='${esc(d.ip)}';UI.portScan()">
           <svg class="ic sm"><use href="#i-search"/></svg></button></td>
       </tr>`).join("") || '<tr><td colspan=8 class=muted>устройств не найдено</td></tr>';
   },
@@ -1049,7 +1012,7 @@ const UI = {
             <time class="time-stamp">${esc(String(a.timestamp).slice(11, 19))}</time></div>
           <div class="fi-body mono">${Object.entries(f).map(([k, v]) =>
             `${k}: ${fmtNum(v)}`).join(" · ")}</div></div>`;
-      }).join("") : "Аномалии не зарегистрированы. Проверьте состояние модели и объём накопленной истории.";
+      }).join("") : "";
     } catch (e) { void e; }
   },
   async aiTrain() {
@@ -1077,7 +1040,6 @@ const UI = {
             <time class="time-stamp">${esc(String(a.timestamp).slice(5, 19).replace("T", " "))}</time></div>
           <div class="fi-body">${esc(a.message || "")}</div></div>`;
       }).join("") : "Алертов пока нет";
-      window.Workspaces?.filterAlerts();
     } catch (e) { void e; }
   },
   async ackAll() {
@@ -1094,16 +1056,14 @@ const UI = {
     try {
       const d = await apiGet(`dbhistory?hours=${hours}`);
       const buckets = d.buckets;
-      $("history-empty").hidden = buckets.length > 0;
-      $("history-summary").textContent = buckets.length ? `Период: ${hours} ч · отсчётов: ${buckets.length}. Пропуски измерений не соединяются линией.` : "Нет сохранённых измерений за выбранный период.";
       drawHistChart("chart-hist", [
         { values: buckets.map(b => b.kbps) },
+        { values: buckets.map(b => b.ping) },
       ]);
-      drawHistChart("chart-hist-latency", [{ values: buckets.map(b => b.ping) }]);
       drawHistChart("chart-hist-ping", [
         { values: buckets.map(b => b.jitter) },
+        { values: buckets.map(b => b.loss) },
       ]);
-      drawHistChart("chart-hist-loss", [{ values: buckets.map(b => b.loss) }]);
     } catch (e) { toast(String(e), true); }
   },
 
@@ -1202,7 +1162,13 @@ const UI = {
             </tr>`;
           }).join("")
         : `<tr><td colspan="5" class="muted">Событий нет</td></tr>`;
-      Runbooks.render(rb);
+      $("rb-list").innerHTML = rb.runbooks.length
+        ? rb.runbooks.map(b =>
+            `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+               <button class="btn accent" onclick="UI.runbookExec('${esc(b.id)}')">${esc(b.name)}</button>
+               <span class="muted">${esc(b.description || b.scope)}${b.params?.length ? " · параметры: " + esc(b.params.join(", ")) : ""}</span>
+             </div>`).join("")
+        : "Runbooks не найдены";
       const forecasts = fcd.forecasts || [];
       $("disk-fc-status").textContent = forecasts.length
         ? `Прогноз по наклону за последние недели — машин на грани: ${forecasts.length}`
@@ -1245,9 +1211,171 @@ const UI = {
       this.loadPark();
     } catch (e) { toast(String(e), true); }
   },
-  async runbookExec(name) {const index=Runbooks.definitions.findIndex(rb=>rb.id===name);if(index>=0)Runbooks.prepare(index);},
+  async runbookExec(name) {
+    if (!confirm(`Выполнить «${name}»?`)) return;
+    try {
+      const r = await apiPost("runbookexec", { name, params: {} });
+      const out = $("rb-output");
+      out.classList.remove("hidden");
+      out.textContent = `[${r.ok ? "OK" : "FAIL"} код ${r.exit_code}, ${r.seconds}s]\n${r.output || "(без вывода)"}`;
+      this.loadPark();
+    } catch (e) { toast(String(e), true); }
+  },
 
-  renderMap(m) { return Topology.render(m); },
+  renderMap(m) {
+    const box = $("infra-map");
+    const W = 960, H = 460;
+    const gw = m && m.gateway;
+    const self = (m.nodes || []).find(n => n.kind === "master");
+    const others = (m.nodes || []).filter(n =>
+      n !== self && !(n.kind === "router" && n.ip === gw));
+
+    const statusColor = (n) => {
+      if (!n.online) return "#ff5c74";
+      const k = n.karma ?? 100;
+      return k >= 80 ? "#22d3a7" : k >= 50 ? "#f5b942" : "#ff5c74";
+    };
+    const typeIcon = (n) => {
+      const k = n.kind || "host";
+      if (k === "router") return "R";
+      if (k === "switch") return "S";
+      if (k === "server" || k === "infra") return "Srv";
+      if (k === "pc") return "PC";
+      return n.online ? "H" : "!";
+    };
+    const nodeLabel = (n) => {
+      const alias = (n.alias || "").trim();
+      const hn = (n.hostname || "").trim();
+      const nm = (n.name || "").trim();
+      const ip = (n.ip || "").trim();
+      if (alias && alias.toLowerCase() !== ip.toLowerCase() &&
+          alias.toLowerCase() !== nm.toLowerCase()) return alias;
+      if (hn && hn !== "-" && hn.toLowerCase() !== ip.toLowerCase()) return hn;
+      return nm || ip || "?";
+    };
+    const decimals = (n) => {
+      const parts = [];
+      if (n.hostname && n.hostname !== "-") parts.push(n.hostname);
+      if (n.sys_name && n.sys_name !== n.hostname && n.sys_name !== n.ip) parts.push(n.sys_name);
+      if (n.vendor) parts.push(n.vendor);
+      if (n.os) parts.push(n.os);
+      return parts.join(" · ") || "—";
+    };
+    const tooltip = (n) => {
+      const lines = [];
+      lines.push(`${nodeLabel(n)}  (${n.ip || "—"})`);
+      const ident = [];
+      if (n.hostname && n.hostname !== "-") ident.push(`hostname: ${n.hostname}`);
+      if (n.sys_name) ident.push(`SNMP: ${n.sys_name}`);
+      if (ident.length) lines.push(ident.join(" · "));
+      lines.push(`Тип: ${n.kind || "unknown"} · Слой: ${n.layer || "—"}`);
+      lines.push(`Статус: ${n.online ? "онлайн" : "офлайн"} · karma ${n.karma ?? "—"}`);
+      if (n.uptime_h != null) lines.push(`Аптайм: ${n.uptime_h} ч`);
+      lines.push(n.snmp ? "SNMP: ответил" : "SNMP: нет");
+      if (n.sys_descr) lines.push(n.sys_descr);
+      return lines.join("\n");
+    };
+
+    // разбиваем по слоям
+    const lay = { wan: [], sw: [], srv: [], pc: [], offline: [] };
+    others.forEach(n => {
+      const l = n.layer || (n.online ? "host" : "offline");
+      if (l in lay) lay[l].push(n);
+      else if (!n.online) lay.offline.push(n);
+      else lay.pc.push(n);
+    });
+
+    // Горизонтальные слои: Y-координаты центров зон
+    const zones = [
+      { key: "wan", title: "WAN", y: 92, color: "#4f8cff" },
+      { key: "sw", title: "СВИТЧ", y: 182, color: "#a78bfa" },
+      { key: "srv", title: "СЕРВИСЫ", y: 272, color: "#22d3a7" },
+      { key: "pc", title: "ХОСТЫ", y: 362, color: "#cbd5e1" },
+    ];
+    const ZONE_W = 900, ZONE_X = 30;
+    const R = 15;
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%">`;
+    // фон
+    svg += `<rect x="0" y="0" width="${W}" height="${H}" fill="#0a1322" rx="10"/>`;
+    // заголовок
+    svg += `<text x="30" y="34" fill="#e2e8f0" font-size="16" font-weight="bold" font-family="system-ui">Топология сети</text>`;
+    svg += `<text x="30" y="52" fill="#8291a7" font-size="11" font-family="system-ui">шлюз: ${esc(gw || "—")} · машин: ${(m.nodes || []).length}</text>`;
+    // легенда
+    const legend = [
+      ["#22d3a7", "online / ok"],
+      ["#f5b942", "проблемы"],
+      ["#ff5c74", "офлайн"],
+      ["#4f8cff", "WAN / router"],
+      ["#a78bfa", "switch"],
+    ];
+    const LG_X0 = 560;
+    legend.forEach(([c, t], i) => {
+      const yy = 24 + i * 20;
+      svg += `<rect x="${LG_X0}" y="${yy}" width="12" height="12" rx="3" fill="${c}"/>`;
+      svg += `<text x="${LG_X0 + 18}" y="${yy + 10}" fill="#8291a7" font-size="10" font-family="system-ui">${esc(t)}</text>`;
+    });
+
+    // зоны и связи
+    zones.forEach(z => {
+      const n = lay[z.key] || [];
+      svg += `<rect x="${ZONE_X}" y="${z.y - 34}" width="${ZONE_W}" height="68" rx="10" fill="#0e1a2e" stroke="#1d2839" stroke-width="1"/>`;
+      svg += `<rect x="${ZONE_X}" y="${z.y - 34}" width="${ZONE_W}" height="68" rx="10" fill="none"/>`;
+      svg += `<text x="${ZONE_X + 10}" y="${z.y - 18}" fill="${z.color}" font-size="9" font-weight="bold" font-family="system-ui" letter-spacing="1">${z.title}</text>`;
+      n.forEach((vm, i) => {
+        if (i > 8) return;
+        const span = ZONE_W - 20;
+        const x = ZONE_X + 20 + (span * (i + 0.5)) / Math.max(n.length, 1);
+        svg += `<line x1="${ZONE_X + 20}" y1="${z.y}" x2="${ZONE_W + ZONE_X - 20}" y2="${z.y}" stroke="#1d2839" stroke-width="0.5"/>`;
+        svg += this._mapNode(vm, x, z.y, R, statusColor(vm), typeIcon(vm),
+                             nodeLabel(vm), tooltip(vm), decimals(vm));
+      });
+    });
+
+    // офлайн зона отдельно
+    if (lay.offline.length) {
+      svg += `<rect x="${ZONE_X}" y="${H - 80}" width="${ZONE_W}" height="58" rx="10" fill="#1a0f16" stroke="#ff5c74" stroke-dasharray="5 4" stroke-width="1"/>`;
+      svg += `<text x="${ZONE_X + 10}" y="${H - 60}" fill="#ff5c74" font-size="9" font-weight="bold" font-family="system-ui" letter-spacing="1">ОФЛАЙН</text>`;
+      lay.offline.forEach((vm, i) => {
+        if (i > 6) return;
+        const span = ZONE_W - 20;
+        const x = ZONE_X + 20 + (span * (i + 0.5)) / Math.max(lay.offline.length, 1);
+        svg += this._mapNode(vm, x, H - 51, R, "#ff5c74", "!", nodeLabel(vm),
+                             tooltip(vm), decimals(vm));
+      });
+    }
+
+    // мастер — отдельная карточка снизу-справа
+    if (self) {
+      const sx = W - 210, sy = 60;
+      svg += `<rect x="${sx}" y="${sy}" width="190" height="52" rx="8" fill="#0e1a2e" stroke="#22d3a7" stroke-width="1.5"/>`;
+      svg += `<circle cx="${sx + 18}" cy="${sy + 18}" r="9" fill="#101724" stroke="#22d3a7" stroke-width="1.5"/>`;
+      svg += `<text x="${sx + 18}" y="${sy + 22}" fill="#22d3a7" font-size="9" text-anchor="middle" font-family="system-ui" font-weight="bold">NP</text>`;
+      svg += `<text x="${sx + 34}" y="${sy + 16}" fill="#e2e8f0" font-size="11" font-weight="bold" font-family="system-ui">${esc((self.name || "NetPulse").slice(0, 20))}</text>`;
+      svg += `<text x="${sx + 34}" y="${sy + 31}" fill="#8291a7" font-size="10" font-family="system-ui">${esc(self.ip || "—")} · главный</text>`;
+      svg += `<text x="${sx + 34}" y="${sy + 44}" fill="#22d3a7" font-size="10" font-family="system-ui">karma ${self.karma ?? 100} · online</text>`;
+      svg += `<title>${esc(tooltip(self))}</title>`;
+      // линия от мастера вниз к хостам
+      svg += `<line x1="${sx + 95}" y1="${sy + 52}" x2="${sx + 95}" y2="${H - 22}" stroke="#1d2839" stroke-width="1" stroke-dasharray="4 3"/>`;
+    }
+
+    svg += "</svg>";
+    box.innerHTML = svg;
+    this._lastMapSvg = svg;
+  },
+  _mapNode(n, x, y, r, col, icon, label, tipText, detail) {
+    const off = n && n.online === false;
+    let s = `<g>`;
+    s += `<title>${esc(tipText || label)}</title>`;
+    s += `<circle cx="${x}" cy="${y}" r="${r}" fill="#101724" stroke="${col}" stroke-width="${off ? 2.5 : 2}"/>`;
+    s += `<text x="${x}" y="${y + 3.5}" fill="${col}" font-size="${icon.length > 2 ? 9 : 11}" text-anchor="middle" font-family="system-ui" font-weight="bold">${esc(icon || "H")}</text>`;
+    s += `<text x="${x}" y="${y + r + 16}" fill="#e2e8f0" font-size="10" text-anchor="middle" font-family="system-ui">${esc(label || "?")}</text>`;
+    s += `<text x="${x}" y="${y + r + 29}" fill="#8291a7" font-size="9" text-anchor="middle" font-family="system-ui">${esc((detail || "").slice(0, 26))}</text>`;
+    if (off) {
+      s += `<text x="${x}" y="${y - r - 6}" fill="#ff5c74" font-size="9" text-anchor="middle" font-family="system-ui">ОФЛАЙН</text>`;
+    }
+    return s + `</g>`;
+  },
   exportMap(fmt) {
     const box = $("infra-map");
     const svgEl = box.querySelector("svg");
@@ -1268,8 +1396,7 @@ const UI = {
       return;
     }
     if (fmt === "png") {
-      const bounds = svgEl.viewBox.baseVal;
-      const W = bounds.width, H = bounds.height, scale = Math.min(2, 8192 / Math.max(W, H));
+      const W = 960, H = 460, scale = 2;
       const xml = new XMLSerializer().serializeToString(svgEl);
       const svg64 = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
       const img = new Image();
@@ -1536,7 +1663,7 @@ const UI = {
   async loadDashPlatform() {
     try {
       const [h, r] = await Promise.all([
-        apiGet("hosts", false), apiGet("journalreport?days=1", false)]);
+        apiGet("hosts"), apiGet("journalreport?days=1")]);
       const worst = h.hosts.filter(x => x.health_score < 80)
         .sort((a, b) => a.health_score - b.health_score).slice(0, 3);
       let html = "";
@@ -1546,7 +1673,7 @@ const UI = {
           return `${esc(m.name)}: <span style="color:${c};font-weight:600">${m.health_score}</span>`;
         }).join("<br>");
       else
-        html += `<span class="muted">${h.hosts.length ? 'Нет зарегистрированных низких оценок' : 'Агенты ещё не прислали данные парка'}</span>`;
+        html += `<span class="muted">парк здоров</span>`;
       const offline = h.hosts.filter(x => !x.online).length;
       if (offline)
         html += `<br><span style="color:#ff5c74">офлайн: ${offline}</span>`;
@@ -1642,7 +1769,6 @@ const UI = {
       $("settings-status").innerHTML =
         `Сохранено и применено (${new Date().toLocaleTimeString("ru-RU")})${needRestart}`;
       toast("Настройки применены");
-      window.Workspaces?.settingsSaved();
     } catch (e) {
       $("settings-status").textContent = e.message;
     }
@@ -1691,16 +1817,122 @@ const UI = {
   },
 
   /* ---------- sysadmin ---------- */
-  async loadSysadmin() { return Sysadmin.load(); },
-  async refreshSla() { return Sysadmin.sla(); },
-  async refreshRam() { return Sysadmin.ram(); },
-  async refreshL2() { return Sysadmin.l2(); },
-  async refreshGeo() { return Sysadmin.geo(); },
-  async refreshProxmox() { return Sysadmin.proxmox(); },
-  async refreshMtrHist() { return Sysadmin.mtr(); },
-  async refreshCve() { return Sysadmin.cve(); },
-  async runCve() { return Sysadmin.run('cve'); },
-  async refreshAudit() { return Sysadmin.audit(); },
+  async loadSysadmin() {
+    this.refreshSla();
+    this.refreshRam();
+    this.refreshL2();
+    this.refreshGeo();
+    this.refreshProxmox();
+    this.refreshMtrHist();
+    this.refreshCve();
+    this.refreshAudit();
+  },
+  async refreshSla() {
+    try {
+      const r = await apiGet("sla?days=30");
+      const box = $("sla-box");
+      const d = r.devices || [];
+      if (!d.length) { box.innerHTML = "<span class='muted'>нет данных о хостах</span>"; return; }
+      const tr = (x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.ip||"")}</td>` +
+        `<td>${(x.sla? x.sla.toFixed(2) : "—")}%</td><td>${x.offline ?? 0}</td>` +
+        `<td>${x.up ?? 0}</td><td>${x.total ?? 0}</td></tr>`;
+      box.innerHTML = `<table><thead><tr><th>Хост</th><th>IP</th><th>SLA</th><th>Оффлайн</th><th>В ап</th><th>Событий</th></tr></thead>` +
+        `<tbody>${d.map(tr).join("")}</tbody></table>`;
+    } catch (e) { $("sla-box").textContent = String(e); }
+  },
+  async refreshRam() {
+    try {
+      const r = await apiGet("ramforecast");
+      const box = $("ram-box");
+      box.innerHTML =
+        `<p>Текущее: <b>${r.last_pct ?? "—"}%</b>${r.slope_pct_pt != null ? ` (тренд ${r.slope_pct_pt >= 0 ? "+" : ""}${r.slope_pct_pt}/мин)` : ""}</p>` +
+        `<p>Прогноз: ${r.days_left != null ? `<b>${r.days_left}</b> дней до 95%<br>(точка: ${r.horizon_days != null ? r.horizon_days : "—"} дн.)`
+          : (r.slope_pct_pt ? r.slope_pct_pt >= 0 ? "<span class='ok'>не предвидится</span>" : "<span class='ok'>память освобождается</span>" : "<span class='muted'>нет истории</span>")}</p>` +
+        `<p class="muted">модель: наименьшие квадраты, последние ${r.n_points ?? 0} точек</p>`;
+    } catch (e) { $("ram-box").textContent = String(e); }
+  },
+  async refreshL2() {
+    try {
+      const r = await apiGet("l2map");
+      const box = $("l2-box");
+      const ports = r.ports || [];
+      if (!ports.length) {
+        box.innerHTML = "<span class='muted'>L2-карта не заполнена. Убедитесь, что настроен SNMP (community) на коммутаторах, и нажмите «Опрос».</span>";
+        return;
+      }
+      const tr = (p) => `<tr><td class='mono'>${esc(p.mac||"")}</td><td>${esc(p.port||"")}</td><td>${esc(p.switch||"")}</td><td>${esc(p.mapped||"")}</td></tr>`;
+      box.innerHTML = `<table><thead><tr><th>MAC</th><th>Порт</th><th>Коммутатор</th><th>Устройство</th></tr></thead>` +
+        `<tbody>${ports.slice(0, 200).map(tr).join("")}</tbody></table>`;
+    } catch (e) { $("l2-box").textContent = String(e); }
+  },
+  async refreshGeo() {
+    try {
+      const r = await apiGet("geomap?limit=150");
+      const box = $("geo-box");
+      const cc = r.countries || [];
+      if (!cc.length) { box.innerHTML = "<span class='muted'>нет гео-данных (нет атак извне за период)</span>"; return; }
+      const bar = (c) => `<div class="geo-row"><span class="geo-flag">${c.flag||""}</span>` +
+        `<span>${esc(c.country)}</span><span class="geo-bar"><i style="width:${Math.min(100, (c.n/cc[0].n)*100)}%"></i></span>` +
+        `<b>${c.n}</b></div>`;
+      box.innerHTML = cc.map(bar).join("") +
+        `<div class="muted" style="margin-top:8px">источник: инциденты безопасности, ${cc.reduce((a,c)=>a+c.n,0)} атак</div>`;
+    } catch (e) { $("geo-box").textContent = String(e); }
+  },
+  async refreshProxmox() {
+    try {
+      const r = await apiGet("proxmox");
+      const box = $("pxm-box");
+      $("pxm-ts").textContent = r.fetched ? "снимок: " + r.last_update : (r.enabled ? (r.error||"нет снимка — нажмите «Опрос»") : "PVE не настроен (config proxmox)");
+      const nodes = r.nodes || [];
+      if (!nodes.length) { box.innerHTML = "<span class='muted'>нет узлов</span>"; return; }
+      const tr = (n) => `<tr><td>${esc(n.node)}</td><td>${n.cpu_status}</td><td>${n.cpu || "—"}%</td><td>${n.mem || "—"}%</td><td>${n.uptime}</td></tr>`;
+      box.innerHTML = `<table><thead><tr><th>Узел</th><th>Статус</th><th>CPU</th><th>RAM</th><th>Uptime</th></tr></thead>` +
+        `<tbody>${nodes.map(tr).join("")}</tbody></table>` +
+        `<div style='margin-top:8px'><button class="mini-btn" onclick="UI.refreshProxmox()">Опрос на лету</button></div>`;
+    } catch (e) { $("pxm-box").textContent = String(e); }
+  },
+  async refreshMtrHist() {
+    try {
+      const r = await apiGet("mtrhistory?hours=24");
+      const box = $("mtrhist-box");
+      const entries = r.entries || [];
+      if (!entries.length) { box.innerHTML = "<span class='muted'>ещё нет снимков MTR</span>"; return; }
+      const tr = (x) => `<tr><td class='mono'>${esc(x.target)}</td><td>${esc(x.ts||"")}</td><td>${x.hops}</td><td>${x.loss}%</td><td>${x.avg_ms ?? "—"}</td></tr>`;
+      box.innerHTML = `<table><thead><tr><th>Цель</th><th>Время</th><th>Хопов</th><th>Потери</th><th>Средний, ms</th></tr></thead>` +
+        `<tbody>${entries.slice(-60).map(tr).join("")}</tbody></table>`;
+    } catch (e) { $("mtrhist-box").textContent = String(e); }
+  },
+  async refreshCve() {
+    try {
+      const r = await apiGet("cvestatus");
+      $("cve-box").innerHTML =
+        `<p>NVD-кэш: <b>${r.total ?? 0}</b> записей${r.last_update ? `, обновлено ${esc(r.last_update)}` : ""}</p>` +
+        `<p>Включено: ${r.enabled ? "<span class='ok'>да</span>" : "<span class='muted'>нет</span>"}${r.enabled && r.nvd_key ? "" : "</p><p class='muted'>NVD-ключ не задан — жёсткий rate-limit</p>"}` +
+        `<button class="mini-btn" onclick="UI.runCve()" style="margin-top:8px">Прогнать проверку ПО</button>`;
+    } catch (e) { $("cve-box").textContent = String(e); }
+  },
+  async runCve() {
+    try {
+      $("cve-box").textContent = "проверка… (NVD может быть медленным)";
+      const r = await apiPost("cvescan");
+      const found = r.found || [];
+      if (!found.length) { $("cve-box").innerHTML = "<span class='ok'>Уязвимостей не найдено</span>"; return; }
+      const tr = (f) => `<tr><td>${esc(f.product)} ${esc(f.version||"")}</td><td><a href="https://nvd.nist.gov/vuln/detail/${esc(f.cve)}" target="_blank">${esc(f.cve)}</a></td><td>${esc(f.severity||"")}</td></tr>`;
+      $("cve-box").innerHTML = `<table><thead><tr><th>ПО</th><th>CVE</th><th>Severity</th></tr></thead>` +
+        `<tbody>${found.map(tr).join("")}</tbody></table>`;
+    } catch (e) { $("cve-box").textContent = String(e); }
+  },
+  async refreshAudit() {
+    try {
+      const r = await apiGet("audit?limit=100");
+      const box = $("audit-box");
+      const rows = r.entries || [];
+      if (!rows.length) { box.innerHTML = "<span class='muted'>журнал изменений пуст</span>"; return; }
+      const tr = (x) => `<tr><td class='mono'>${esc(x[0]||"")}</td><td>${esc(x[1]||"")}</td><td class='mono'>${esc(x[3]||"")}</td><td>${x[4]==200?"<span class='ok'>ok</span>":"<span class='warn'>"+x[4]+"</span>"}</td></tr>`;
+      box.innerHTML = `<table><thead><tr><th>Время</th><th>Пользователь</th><th>Действие</th><th>Статус</th></tr></thead>` +
+        `<tbody>${rows.map(tr).join("")}</tbody></table>`;
+    } catch (e) { $("audit-box").textContent = String(e); }
+  },
   printMap() {
     const svg = $("infra-map")?.innerHTML || "";
     if (!svg) { toast("Сначала загрузите топологию", true); return; }
@@ -1729,23 +1961,6 @@ const UI = {
     try {
       const st = await apiGet("p2pstatus");
       const box = $("mesh-status");
-      const available = !!st.ok && !!st.enabled && !!st.connected;
-      this.meshAvailable = available;
-      document.querySelectorAll('#view-mesh button, #view-mesh select, #view-mesh input').forEach(control => {
-        if (!control.classList.contains('workspace-refresh') && control.getAttribute('onclick') !== 'UI.loadMesh()') control.disabled = !available;
-      });
-      if (!available) {
-        const explanation = !st.ok ? "P2P-мост не создан. Проверьте конфигурацию p2p."
-          : !st.enabled ? "P2P-модуль отключён в конфигурации. Для работы с решёткой настройте p2p.enabled, адрес и порт узла, затем перезапустите NetPulse."
-          : "Нет соединения с P2P-узлом. Проверьте запуск ядра решётки, адрес, порт и параметры аутентификации. После восстановления нажмите «Обновить данные».";
-        box.textContent = explanation;
-        for (const id of ['mesh-nodes','mesh-heat','mesh-services','mesh-topo-status','mesh-global-soft','mesh-audit','mesh-page','rpc-result']) $(id).textContent = "Данные недоступны: " + (!st.enabled ? "P2P отключён" : "нет соединения с решёткой");
-        $('mesh-nodes-table').querySelector('tbody').innerHTML = '';
-        $('mesh-topo-svg').replaceChildren();
-        $('mesh-node').replaceChildren(); $('rpc-node').replaceChildren();
-        if (this._topoTimer) {clearInterval(this._topoTimer); this._topoTimer = null;}
-        return;
-      }
       if (!st.ok) { box.innerHTML = `<span class='warn'>${esc(st.error || "мост не готов")}</span>`; return; }
       const stDot = st.connected
         ? "<span class='ok-dot'></span><b>соединён</b>"
@@ -2005,7 +2220,6 @@ const UI = {
         row({ node_id: r.node_id, services: r.all_services || [], host: "localhost", version: "" }, true) +
         (r.connected || []).map(n => row(n, false)).join("");
       await this.loadMeshServices();
-      this.rpcFillServices();
     } catch (e) {
       if (e instanceof UnauthorizedError) { this.showLogin(); return; }
       toast(String(e), true);
@@ -2014,10 +2228,14 @@ const UI = {
 
   async loadMeshServices() {
     const node = $("mesh-node").value, box = $("mesh-services");
+    const rpcNode = $("rpc-node");
+    rpcNode.value = node;
+    this.rpcFillServices([]);
     if (!node) return;
     try {
       const r = await apiGet("p2pservices?node=" + encodeURIComponent(node));
       if (!r.ok) { box.innerHTML = `<span class='warn'>${esc(r.error || "ошибка")}</span>`; return; }
+      if (rpcNode.value !== node) return;
       const svcs = r.services || [];
       if (!svcs.length) { box.innerHTML = "<span class='muted'>сервисов нет</span>"; return; }
       const chips = svcs.map(s => {
@@ -2034,9 +2252,8 @@ const UI = {
     }
   },
 
-  rpcFillServices(svcs) {
+  rpcFillServices(list) {
     const sel = $("rpc-service");
-    const list = svcs && svcs.length ? svcs : Object.keys(MESH_SERVICES);
     sel.innerHTML = list.map(s => {
       const meta = MESH_SERVICES[s];
       return `<option value="${esc(s)}">${esc(meta ? meta.title : s)}</option>`;
@@ -2046,6 +2263,7 @@ const UI = {
 
   rpcFillMethods() {
     const svc = $("rpc-service").value;
+    $("rpc-method").value = svc === "wifi_samples" ? "latest" : "";
     $("rpc-methods-dl").innerHTML = (MESH_METHODS[svc] || [])
       .map(m => `<option value="${esc(m)}"></option>`).join("");
   },

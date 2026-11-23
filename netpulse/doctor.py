@@ -5,7 +5,13 @@ import platform
 import sys
 from pathlib import Path
 
+from .config import load_env_files
+
+
 def check(config_path='config.json'):
+    # --check запускают и без shell-лаунчера: подхватываем те же env-файлы,
+    # что и open_netpulse.sh, иначе MikroTik-проверка даёт ложный провал.
+    load_env_files(config_path)
     checks=[{'name':'python','ok':sys.version_info >= (3,12),'detail':platform.python_version()}]
     for module in ('psutil','numpy','pandas','sklearn','msgpack'):
         checks.append({'name':module,'ok':importlib.util.find_spec(module) is not None,'detail':'dependency'})
